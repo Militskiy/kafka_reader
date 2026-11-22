@@ -23,13 +23,41 @@ public final class FixtureHost {
     static final Map<String,Long> epochs = new HashMap<>();
     static Admin admin;
     static KafkaProducer<byte[],byte[]> producer;
+    static String clientEndpoint;
+
+    static Properties authenticated(String user, String password) {
+        Properties properties = new Properties();
+        properties.setProperty("bootstrap.servers", clientEndpoint);
+        properties.setProperty("security.protocol", "SASL_PLAINTEXT");
+        properties.setProperty("sasl.mechanism", "PLAIN");
+        properties.setProperty("sasl.jaas.config",
+                "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"" +
+                user + "\" password=\"" + password + "\";");
+        return properties;
+    }
+
+    static String verifyCluster(Admin client, String expected) throws Exception {
+        String actual = client.describeCluster().clusterId().get(45, TimeUnit.SECONDS);
+        if (!expected.equals(actual)) {
+            throw new IllegalStateException("Listener belongs to a different fixture cluster");
+        }
+        return actual;
+    }
 
     public static void main(String[] args) throws Exception {
         System.setProperty("org.slf4j.simpleLogger.defaultLogLevel", "error");
-        admin = Admin.create(Map.of("bootstrap.servers", "127.0.0.1:19092", "default.api.timeout.ms", "20000", "request.timeout.ms", "10000"));
-        producer = producer(null);
+        String expectedCluster = args[0];
+        String plainEndpoint = "127.0.0.1:" + Integer.parseInt(args[1]);
+        clientEndpoint = "127.0.0.1:" + Integer.parseInt(args[2]);
+        try (var plain = Admin.create(Map.of("bootstrap.servers", plainEndpoint))) {
+            verifyCluster(plain, expectedCluster);
+        }
+        admin = Admin.create(authenticated("admin", System.getenv("KAFKA_FIXTURE_ADMIN_PASSWORD")));
         try (BufferedReader in = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
-            System.out.println("{\"ready\":true}"); System.out.flush();
+            String cluster = verifyCluster(admin, expectedCluster);
+            producer = producer(null);
+            System.out.println(JSON.writeValueAsString(Map.of("clusterId", cluster)));
+            System.out.flush();
             String line;
             while ((line = in.readLine()) != null) {
                 JsonNode request = JSON.readTree(line);
@@ -62,7 +90,8 @@ public final class FixtureHost {
             }
         } finally {
             for (var tx : transactions.values()) tx.close(Duration.ofSeconds(3));
-            producer.close(Duration.ofSeconds(3)); admin.close(Duration.ofSeconds(3));
+            if (producer != null) producer.close(Duration.ofSeconds(3));
+            admin.close(Duration.ofSeconds(3));
         }
     }
 
@@ -95,8 +124,7 @@ public final class FixtureHost {
         return Map.of("offsets",offsets,"groups",groups);
     }
     static boolean groupDenied(String app) {
-        Properties p=new Properties(); p.setProperty("bootstrap.servers","127.0.0.1:19094");p.setProperty("security.protocol","SASL_PLAINTEXT");p.setProperty("sasl.mechanism","PLAIN");
-        p.setProperty("sasl.jaas.config","org.apache.kafka.common.security.plain.PlainLoginModule required username=\"reader\" password=\"reader-fixture\";");
+        Properties p=authenticated("reader", System.getenv("KAFKA_FIXTURE_READER_PASSWORD"));
         p.setProperty("group.id","denied-"+app);p.setProperty("enable.auto.commit","false");
         p.setProperty("key.deserializer",ByteArrayDeserializer.class.getName());p.setProperty("value.deserializer",ByteArrayDeserializer.class.getName());
         try (var c=new KafkaConsumer<byte[],byte[]>(p)) {
@@ -104,7 +132,8 @@ public final class FixtureHost {
         } catch(GroupAuthorizationException expected) { return true; }
     }
     static KafkaProducer<byte[],byte[]> producer(String id) {
-        Properties p=new Properties();p.setProperty("bootstrap.servers","127.0.0.1:19092");p.setProperty("key.serializer",ByteArraySerializer.class.getName());p.setProperty("value.serializer",ByteArraySerializer.class.getName());p.setProperty("acks","all");p.setProperty("max.block.ms","20000");
+        Properties p=authenticated("admin", System.getenv("KAFKA_FIXTURE_ADMIN_PASSWORD"));
+        p.setProperty("key.serializer",ByteArraySerializer.class.getName());p.setProperty("value.serializer",ByteArraySerializer.class.getName());p.setProperty("acks","all");p.setProperty("max.block.ms","20000");
         if(id!=null)p.setProperty("transactional.id",id);return new KafkaProducer<>(p);
     }
     static RecordMetadata send(KafkaProducer<byte[],byte[]> p,String topic,int partition,String value) throws Exception {

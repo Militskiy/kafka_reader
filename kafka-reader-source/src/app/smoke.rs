@@ -470,7 +470,7 @@ impl ReaderApp {
             }
             12 if elapsed > Duration::from_millis(1200) => {
                 self.persist();
-                let text = fs::read_to_string(self.store.path()).unwrap();
+                let text = fs::read_to_string(self.options.store.path()).unwrap();
                 assert!(
                     !text.contains(SECRET)
                         && !text.contains("qa-reader")
@@ -484,7 +484,7 @@ impl ReaderApp {
                     "Server/settings must be actual native viewports"
                 );
                 self.smoke.checks += 1;
-                let loaded = self.store.load().unwrap();
+                let loaded = self.options.store.load().unwrap();
                 assert_eq!(loaded.settings, self.workspace.settings);
                 self.smoke.checks += 1;
                 assert!(loaded.servers.iter().all(|server| !server.offline));

@@ -90,12 +90,15 @@ The original unsigned Windows release was cross-compiled and its imports were
 audited. A separate Windows GNU build passed 33 release tests and 9 offline
 self-checks on Windows x64. Its headless reader inspected six partitions and
 read one record from `fleet.telemetry` over the Sondahub PLAINTEXT bridge.
-Windows desktop interaction remains unverified. The executable hash and host
-checks are in the [native Windows report](../qa/results/v0.3.0/windows-native-2026-11-22.json).
+Its executable hash and checks are in the
+[earlier native Windows report](../qa/results/v0.3.0/windows-native-2026-11-22.json).
 
-The earlier 0.2.0 release passed 20 local Kafka checks, including a topic-only
-SASL/PLAIN principal and unchanged consumer-group state. The 0.3.0 UI update
-and the subsequent Windows host check did not repeat that fixture suite.
+The Windows review build passed 46 release tests, nine offline self-checks,
+native GUI smoke and separate-process reopen checks, and a read through the
+Sondahub bridge. Its disposable Kafka 4.1.2 fixture passed 20 checks, including
+topic-only SASL/PLAIN access, unchanged consumer-group state and finite reads
+during an open transaction. See the
+[Windows review-build results](../qa/results/v0.3.0/windows-review-fixes-2026-11-22.json).
 
 Other current limits:
 

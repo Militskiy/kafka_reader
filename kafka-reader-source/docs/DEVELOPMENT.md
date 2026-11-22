@@ -91,9 +91,9 @@ if ($check.ExitCode -ne 0) { throw 'Kafka Reader self-test failed' }
 
 The build script sets the required native-library environment before invoking
 Cargo and packages the result. The original release used the Linux cross-build
-route below. The [native Windows report](../qa/results/v0.3.0/windows-native-2026-11-22.json)
-identifies the later binary used for the Windows release tests, offline
-self-test, and read-only bridge check.
+route below. The [earlier native Windows report](../qa/results/v0.3.0/windows-native-2026-11-22.json)
+and the [review-build results](../qa/results/v0.3.0/windows-review-fixes-2026-11-22.json)
+identify the executable used for each Windows verification run.
 
 For a Linux cross-build, install the MinGW-w64 compiler/binutils and the other
 native build tools, including Ninja, then run:
@@ -179,12 +179,12 @@ mvn dependency:build-classpath -Dmdep.outputFile=broker-classpath.txt
 python3 run-integration.py --app rust --exe ../../target/release/kafka-reader-rust
 ```
 
-It needs local ports 19092, 19093 and 19094 and the JDK/Maven prerequisites.
-Read [the fixture guide](../qa/integration/README.md) before running it. It
-recreates its own `work/broker-data` and seeds topics, ACLs, records and group
-offsets solely for the test. Do not redirect that directory or setup to an
-existing broker. The app remains a read-only reader; mutation code in the Java
-fixture is not part of the desktop executable.
+Each run allocates three loopback ports and a fresh directory under
+`qa/integration/work`. Before seeding topics, ACLs, records, or group offsets,
+the fixture checks that both client listeners report the cluster ID it formatted
+for this run. Its broker storage and credentials are temporary. The
+[fixture guide](../qa/integration/README.md) also describes the separate
+read-only Sondahub bridge check.
 
 The checks cover snapshots, offsets, timestamp seeks, follow, exact limits,
 raw records/headers, authentication failures, restricted topic access,
@@ -208,11 +208,12 @@ python3 packaging/package.py \
   --out dist/v0.3.0
 ```
 
-The packager uses explicit `COMMON` and `SOURCE` allowlists. Preserve the root
-guidance and the three handoff references in `SOURCE`. It excludes QA `work`
-and `work-v*` directories. Inspect final contents for unintended local profiles
-or generated files, check ZIP CRCs and compare packaged binaries to the ones
-whose results you are reporting. Retain dependency licenses/notices.
+The packager lists the shipped integration fixture files in `FIXTURE_FILES`.
+Add new fixture sources there when needed. The checksum manifest covers all
+recognized release artifacts present in the selected output directory, including
+platform builds produced by earlier invocations. Run packaging commands
+sequentially for a given output directory. Verify ZIP CRCs and compare packaged
+binaries with the hashes in the corresponding test reports.
 
 When making a new software release, update Cargo.toml/Cargo.lock, versioned
 paths in the build/package scripts, documentation, the changelog, screenshots,

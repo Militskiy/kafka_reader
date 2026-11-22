@@ -4,6 +4,10 @@ Verified on **22 November 2026 (Europe/Moscow)**. This release updates the
 portable native application previously named Kafka Reader Rust. It changes the
 workspace startup, app branding, message ordering and inspector layout.
 
+This report covers the original release. For the later Windows executables,
+see the [headless Windows run](qa/results/v0.3.0/windows-native-2026-11-22.json)
+and the [Windows run after the review fixes](qa/results/v0.3.0/windows-review-fixes-2026-11-22.json).
+
 ## Executed checks
 
 | Check | Actual result |

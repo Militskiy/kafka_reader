@@ -6,6 +6,7 @@ Example: python3 run-integration.py --app csharp --exe /absolute/path/KafkaReade
 """
 import argparse
 import base64
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -13,12 +14,14 @@ import os
 from pathlib import Path
 import platform
 import queue
-import shutil
+import secrets
 import socket
+from string import Template
 import subprocess
-import sys
+import tempfile
 import threading
 import time
+import uuid
 
 ROOT = Path(__file__).resolve().parent
 WORK = ROOT / 'work'
@@ -30,24 +33,74 @@ def java_command(name):
 
 
 class Fixture:
-    def __init__(self, classpath):
-        self.log = (WORK / 'fixture-errors.log').open('w', encoding='utf-8')
-        self.process = subprocess.Popen([java_command('java'), '-XX:-UsePerfData', '-Xmx256m', '-cp', classpath + os.pathsep + str(WORK), 'FixtureHost'], cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log, text=True, encoding='utf-8', bufsize=1)
-        if not json.loads(self.process.stdout.readline()).get('ready'):
-            raise RuntimeError('Fixture host did not start')
+    def __init__(self, process, broker, cluster_id):
+        self.process = process
+        self.broker = broker
+        self.replies = queue.Queue()
+        threading.Thread(target=self.read_output, daemon=True).start()
+        if self.reply().get('clusterId') != cluster_id:
+            raise RuntimeError('Fixture helper did not verify the newly formatted cluster')
+
+    def read_output(self):
+        try:
+            for line in self.process.stdout:
+                self.replies.put(line)
+        finally:
+            self.replies.put(None)
+
+    def reply(self):
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            if self.broker.poll() is not None:
+                raise RuntimeError('Test broker exited; see broker.log in the run directory')
+            try:
+                line = self.replies.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if line is None:
+                raise RuntimeError('Fixture helper exited; see fixture-errors.log in the run directory')
+            return json.loads(line)
+        raise TimeoutError('Timed out waiting for the fixture helper')
 
     def call(self, op, app, **fields):
+        if self.broker.poll() is not None:
+            raise RuntimeError('Test broker exited before the fixture operation')
         self.process.stdin.write(json.dumps(dict(op=op, app=app, **fields)) + '\n')
         self.process.stdin.flush()
-        result = json.loads(self.process.stdout.readline())
+        result = self.reply()
         if result.get('error'): raise RuntimeError(result['error'])
         return result
 
-    def close(self):
-        self.process.stdin.close()
-        try: self.process.wait(timeout=15)
-        except subprocess.TimeoutExpired: self.process.kill(); self.process.wait()
-        self.log.close()
+
+@contextmanager
+def reserve_ports():
+    with ExitStack() as sockets:
+        ports = []
+        for _ in range(3):
+            listener = sockets.enter_context(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
+            if hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            listener.bind(('127.0.0.1', 0))
+            ports.append(listener.getsockname()[1])
+        yield ports
+
+
+def stop_process(process):
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=12)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
+def close_helper(process):
+    try:
+        process.stdin.close()
+        process.wait(timeout=15)
+    except (BrokenPipeError, subprocess.TimeoutExpired):
+        stop_process(process)
 
 
 def parse_summary(stdout):
@@ -60,19 +113,18 @@ def parse_summary(stdout):
     raise AssertionError('Reader did not emit a JSON summary: ' + stdout[-1000:])
 
 
-def test_reader(args, fixture):
+def test_reader(args, fixture, run_dir, session, plain_port, client_port, reader_password):
     app = args.app
-    output = WORK / app
-    output.mkdir(exist_ok=True)
-    (output / 'integration-report.json').unlink(missing_ok=True)
+    output = run_dir / app
+    output.mkdir()
     info = fixture.call('seed', app)
     baseline = fixture.call('state', app)
-    plain = output / 'plain.properties'
-    restricted = output / 'restricted.properties'
-    wrong = output / 'wrong-password.properties'
-    plain.write_text('bootstrap.servers=127.0.0.1:19092\nsecurity.protocol=PLAINTEXT\nisolation.level=read_committed\ngroup.id=' + info['group'] + '\nenable.auto.commit=true\nenable.auto.offset.store=true\nallow.auto.create.topics=true\n')
-    restricted.write_text('bootstrap.servers=127.0.0.1:19094\nsecurity.protocol=SASL_PLAINTEXT\nsasl.mechanism=PLAIN\nsasl.username=reader\nsasl.password=reader-fixture\nisolation.level=read_committed\n')
-    wrong.write_text(restricted.read_text().replace('reader-fixture', 'wrong-fixture-password'))
+    plain = session / 'plain.properties'
+    restricted = session / 'restricted.properties'
+    wrong = session / 'wrong-password.properties'
+    plain.write_text(f'bootstrap.servers=127.0.0.1:{plain_port}\nsecurity.protocol=PLAINTEXT\nisolation.level=read_committed\ngroup.id=' + info['group'] + '\nenable.auto.commit=true\nenable.auto.offset.store=true\nallow.auto.create.topics=true\n', encoding='utf-8')
+    restricted.write_text(f'bootstrap.servers=127.0.0.1:{client_port}\nsecurity.protocol=SASL_PLAINTEXT\nsasl.mechanism=PLAIN\nsasl.username=reader\nsasl.password={reader_password}\nisolation.level=read_committed\n', encoding='utf-8')
+    wrong.write_text(restricted.read_text(encoding='utf-8').replace(reader_password, 'wrong-fixture-password'), encoding='utf-8')
     checks = []
     sequence = 0
 
@@ -98,16 +150,18 @@ def test_reader(args, fixture):
                 if 'READING' in line.upper(): ready.set()
         thread = threading.Thread(target=read_errors, daemon=True)
         thread.start()
-        if after_reading is not None:
-            if not ready.wait(25):
-                process.kill(); process.wait(); raise AssertionError('Reader did not signal READING after captured bounds: ' + ''.join(errors)[-1000:])
-            after_reading()
         try:
+            if after_reading is not None:
+                if not ready.wait(25):
+                    raise AssertionError('Reader did not signal READING after captured bounds: ' + ''.join(errors)[-1000:])
+                after_reading()
             process.wait(timeout=45)
             stdout = process.stdout.read()
         finally:
             if process.poll() is None: process.kill(); process.wait()
-        thread.join(timeout=2)
+            thread.join(timeout=2)
+            process.stdout.close()
+            process.stderr.close()
         (output / f'run-{sequence:02d}.log').write_text(stdout + '\nSTDERR\n' + ''.join(errors), encoding='utf-8')
         summary = parse_summary(stdout)
         records = [json.loads(line) for line in export.read_text(encoding='utf-8').splitlines() if line.strip()] if export.exists() else []
@@ -168,39 +222,55 @@ def test_reader(args, fixture):
     return report
 
 
+def run_fixture(args):
+    args.exe = args.exe.resolve(strict=True)
+    deps = args.classpath.read_text(encoding='utf-8-sig').strip()
+    if not deps:
+        raise ValueError('The Maven classpath file is empty')
+    WORK.mkdir(exist_ok=True)
+    run_dir = Path(tempfile.mkdtemp(prefix='run-', dir=WORK))
+    print(f'Fixture output: {run_dir}', flush=True)
+    cluster_id = base64.urlsafe_b64encode(uuid.uuid4().bytes).decode('ascii').rstrip('=')
+    admin_password = secrets.token_hex(16)
+    reader_password = secrets.token_hex(16)
+    with tempfile.TemporaryDirectory(prefix='cluster-', dir=run_dir) as temporary, ExitStack() as resources:
+        session = Path(temporary)
+        # An argument file keeps the Maven classpath out of Windows' command-line length limit.
+        entries = [Path(entry).resolve().as_posix() for entry in deps.split(os.pathsep)]
+        cp = os.pathsep.join([session.as_posix(), *entries])
+        (session / 'classpath.args').write_text('-classpath\n"' + cp.replace('\\', '\\\\').replace('"', '\\"') + '"\n', encoding='utf-8')
+        subprocess.run([java_command('javac'), '--release', '21', '-encoding', 'UTF-8', '-proc:none',
+                        '@classpath.args', '-d', '.', str(ROOT/'FixtureHost.java')], cwd=session, check=True)
+        java = [java_command('java'), '-XX:-UsePerfData', '-Dfile.encoding=UTF-8', '-Xmx512m', '@classpath.args']
+        log = resources.enter_context((run_dir / 'broker.log').open('w', encoding='utf-8'))
+        with reserve_ports() as (plain_port, controller_port, client_port):
+            template = Template((ROOT / 'server.properties').read_text(encoding='utf-8'))
+            config = template.substitute(plain_port=plain_port, controller_port=controller_port,
+                                         client_port=client_port, admin_password=admin_password,
+                                         reader_password=reader_password)
+            (session / 'server.properties').write_text(config, encoding='utf-8')
+            subprocess.run(java + ['kafka.tools.StorageTool', 'format', '--cluster-id=' + cluster_id, '-c', 'server.properties'],
+                           cwd=session, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=60)
+        broker = resources.enter_context(subprocess.Popen(java + ['kafka.Kafka', 'server.properties'],
+                                         cwd=session, stdout=log, stderr=subprocess.STDOUT))
+        resources.callback(stop_process, broker)
+        helper_log = resources.enter_context((run_dir / 'fixture-errors.log').open('w', encoding='utf-8'))
+        process = resources.enter_context(subprocess.Popen(
+            java + ['FixtureHost', cluster_id, str(plain_port), str(client_port)], cwd=session,
+            env=dict(os.environ, KAFKA_FIXTURE_ADMIN_PASSWORD=admin_password, KAFKA_FIXTURE_READER_PASSWORD=reader_password),
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=helper_log, text=True, encoding='utf-8', bufsize=1))
+        resources.callback(close_helper, process)
+        fixture = Fixture(process, broker, cluster_id)
+        report = test_reader(args, fixture, run_dir, session, plain_port, client_port, reader_password)
+        print(json.dumps(report), flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--app', required=True, choices=['csharp','rust'])
     parser.add_argument('--exe', type=Path, required=True)
     parser.add_argument('--classpath', type=Path, default=ROOT/'broker-classpath.txt')
-    args = parser.parse_args()
-    WORK.mkdir(exist_ok=True)
-    broker_data = WORK / 'broker-data'
-    if broker_data.exists(): shutil.rmtree(broker_data)
-    cp = args.classpath.read_text().strip()
-    subprocess.run([java_command('javac'), '--release', '21', '-proc:none', '-cp', cp, '-d', str(WORK), str(ROOT/'FixtureHost.java')], check=True)
-    base = [java_command('java'), '-XX:-UsePerfData', '-Xmx512m', '-cp', cp]
-    with (WORK/'broker.log').open('w') as log:
-        subprocess.run(base + ['kafka.tools.StorageTool','format','-t','5whIxlPKSMORypa0_jVW_w','-c','server.properties'], cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, check=True)
-        broker = subprocess.Popen(base + ['kafka.Kafka','server.properties'], cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
-        fixture = None
-        try:
-            deadline = time.monotonic()+60
-            while True:
-                if broker.poll() is not None: raise RuntimeError('Broker exited; inspect work/broker.log')
-                try:
-                    with socket.create_connection(('127.0.0.1',19092),timeout=1): break
-                except OSError:
-                    if time.monotonic()>deadline: raise RuntimeError('Broker startup timed out')
-                    time.sleep(.2)
-            fixture=Fixture(cp)
-            report=test_reader(args,fixture)
-            print(json.dumps(report),flush=True)
-        finally:
-            if fixture: fixture.close()
-            broker.terminate()
-            try: broker.wait(timeout=12)
-            except subprocess.TimeoutExpired: broker.kill();broker.wait()
+    run_fixture(parser.parse_args())
 
 
 if __name__=='__main__': main()

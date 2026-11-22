@@ -5,14 +5,23 @@ import hashlib
 import json
 import stat
 import shutil
+import tempfile
 import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 COMMON = ["README.md", "QUICKSTART.md", "CHANGELOG.md", "TEST-REPORT.md", "LICENSE",
           "THIRD-PARTY-NOTICES.md", "THIRD-PARTY", "examples", "docs/screenshots/v0.3.0", "qa/results/v0.3.0"]
-SOURCE = COMMON + ["Cargo.toml", "Cargo.lock", "build.rs", ".cargo/config.toml", "src", "packaging", "qa/integration", ".gitignore",
+FIXTURE_FILES = [
+    ".gitignore", "FixtureHost.java", "README.md", "pom.xml", "run-bridge-check.py",
+    "run-gui-v02.py", "run-gui-v03.py", "run-integration.py", "server.properties",
+    "test_fixture_isolation.py",
+]
+SOURCE = COMMON + ["Cargo.toml", "Cargo.lock", "build.rs", ".cargo/config.toml", "src", "packaging", ".gitignore", ".gitattributes",
                    "AGENTS.md", "CODEX_START.md", "docs/PROJECT_CONTEXT.md", "docs/ARCHITECTURE.md", "docs/DEVELOPMENT.md"]
+SOURCE += [f"qa/integration/{name}" for name in FIXTURE_FILES]
+RELEASE_FILES = ("kafka-reader-source.zip", "kafka-reader-linux-x64.zip",
+                 "kafka-reader-windows-x64.zip", "kafka-reader.exe")
 
 
 def add_tree(archive, relative, prefix):
@@ -24,7 +33,11 @@ def add_tree(archive, relative, prefix):
         relative_parts = file.relative_to(ROOT).parts
         is_qa_work = any(part == "work" or part.startswith("work-v") for part in relative_parts)
         if file.is_file() and "__pycache__" not in relative_parts and not is_qa_work:
-            archive.write(file, f"{prefix}/{file.relative_to(ROOT).as_posix()}")
+            member = f"{prefix}/{file.relative_to(ROOT).as_posix()}"
+            if file.suffix == ".sh" and relative_parts[0] == "packaging":
+                executable(archive, file, member)
+            else:
+                archive.write(file, member)
 
 
 def executable(archive, file, path):
@@ -35,37 +48,55 @@ def executable(archive, file, path):
     archive.writestr(info, file.read_bytes() if isinstance(file, Path) else file)
 
 
+def create_archives(directory, linux_exe, windows_exe):
+    source = directory / "kafka-reader-source.zip"
+    with zipfile.ZipFile(source, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+        for entry in SOURCE:
+            add_tree(archive, entry, "kafka-reader-source")
+    for platform, binary in [("linux-x64", linux_exe), ("windows-x64", windows_exe)]:
+        if binary is None:
+            continue
+        destination = directory / f"kafka-reader-{platform}.zip"
+        prefix = f"kafka-reader-{platform}"
+        with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+            for entry in COMMON:
+                add_tree(archive, entry, prefix)
+            executable(archive, binary, f"{prefix}/{'kafka-reader.exe' if platform == 'windows-x64' else 'kafka-reader'}")
+    if windows_exe is not None:
+        shutil.copyfile(windows_exe, directory / "kafka-reader.exe")
+
+
+def package(out, linux_exe=None, windows_exe=None):
+    out.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=out) as temp:
+        staging = Path(temp)
+        create_archives(staging, linux_exe, windows_exe)
+        manifest = []
+        for name in RELEASE_FILES:
+            path = staging / name
+            if not path.is_file():
+                path = out / name
+                if not path.is_file():
+                    continue
+            manifest.append({"file": name, "bytes": path.stat().st_size,
+                             "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+        sums = staging / "SHA256SUMS.txt"
+        sums.write_text("".join(f"{m['sha256']}  {m['file']}\n" for m in manifest), encoding="ascii")
+        for name in RELEASE_FILES:
+            path = staging / name
+            if path.is_file():
+                path.replace(out / name)
+        sums.replace(out / sums.name)
+    return manifest
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--linux-exe", type=Path)
     parser.add_argument("--windows-exe", type=Path)
     parser.add_argument("--out", type=Path, default=ROOT / "dist/v0.3.0")
     args = parser.parse_args()
-    args.out.mkdir(parents=True, exist_ok=True)
-    outputs = []
-    source = args.out / "kafka-reader-source.zip"
-    with zipfile.ZipFile(source, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-        for entry in SOURCE:
-            add_tree(archive, entry, "kafka-reader-source")
-    outputs.append(source)
-    for platform, binary in [("linux-x64", args.linux_exe), ("windows-x64", args.windows_exe)]:
-        if binary is None:
-            continue
-        destination = args.out / f"kafka-reader-{platform}.zip"
-        prefix = f"kafka-reader-{platform}"
-        with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-            for entry in COMMON:
-                add_tree(archive, entry, prefix)
-            executable(archive, binary, f"{prefix}/{'kafka-reader.exe' if platform == 'windows-x64' else 'kafka-reader'}")
-        outputs.append(destination)
-    if args.windows_exe is not None:
-        standalone = args.out / "kafka-reader.exe"
-        if args.windows_exe.resolve() != standalone.resolve():
-            shutil.copyfile(args.windows_exe, standalone)
-        outputs.append(standalone)
-    manifest = [{"file": p.name, "bytes": p.stat().st_size,
-                 "sha256": hashlib.sha256(p.read_bytes()).hexdigest()} for p in outputs]
-    (args.out / "SHA256SUMS.txt").write_text("".join(f"{m['sha256']}  {m['file']}\n" for m in manifest))
+    manifest = package(args.out, args.linux_exe, args.windows_exe)
     print(json.dumps(manifest, indent=2))
 
 

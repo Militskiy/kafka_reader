@@ -1,9 +1,10 @@
-use crate::direct_consumer::{DirectConsumer, Poll};
+use crate::direct_consumer::{DirectConsumer, Poll, metadata_guard_available};
 use crate::model::*;
-use crossbeam_channel::{Receiver, SendTimeoutError, Sender, bounded};
+use crossbeam_channel::{Receiver, SendTimeoutError, Sender, TryRecvError, bounded};
 use rdkafka::{
     ClientConfig, Offset, TopicPartitionList,
     consumer::{BaseConsumer, Consumer},
+    error::{KafkaError, RDKafkaErrorCode},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -21,26 +22,33 @@ pub enum Event {
     Record(Arc<Record>),
     State(String, String),
     Progress(usize),
-    Skipped,
+    Skipped(usize),
 }
 
 #[derive(Default)]
 pub struct Control {
     pub stop: AtomicBool,
     pub pause: AtomicBool,
-    pub finished: AtomicBool,
     pub queued_bytes: AtomicUsize,
+    skipped: AtomicUsize,
 }
 pub struct Session {
-    pub rx: Receiver<Event>,
+    rx: Receiver<Event>,
+    terminal: Receiver<Event>,
+    worker: thread::JoinHandle<()>,
     pub control: Arc<Control>,
 }
 impl Session {
     pub fn start(request: Request) -> Self {
-        let (tx, rx) = bounded(256);
+        Self::start_with_capacity(request, 256)
+    }
+    fn start_with_capacity(request: Request, capacity: usize) -> Self {
+        let (tx, rx) = bounded(capacity);
+        // The outcome must survive backpressure on the record queue.
+        let (finished_tx, terminal) = bounded(1);
         let control = Arc::new(Control::default());
         let ctl = control.clone();
-        thread::Builder::new()
+        let worker = thread::Builder::new()
             .name("kafka-rust-reader".into())
             .spawn(move || {
                 let result = if request.demo {
@@ -59,11 +67,15 @@ impl Session {
                         Err(e) => ("FAILED".into(), redact(&e, &request.props)),
                     }
                 };
-                let _ = tx.send_timeout(Event::State(state.0, state.1), Duration::from_millis(500));
-                ctl.finished.store(true, Ordering::Release);
+                let _ = finished_tx.send(Event::State(state.0, state.1));
             })
             .expect("Cannot create Kafka worker");
-        Self { rx, control }
+        Self {
+            rx,
+            terminal,
+            worker,
+            control,
+        }
     }
     pub fn try_next(&self) -> Option<Event> {
         match self.rx.try_recv() {
@@ -75,7 +87,18 @@ impl Session {
                 }
                 Some(event)
             }
-            Err(_) => None,
+            // Disconnection guarantees that all data and progress events have
+            // been drained before callers see the terminal state.
+            Err(status) => {
+                let count = self.control.skipped.swap(0, Ordering::AcqRel);
+                if count > 0 {
+                    Some(Event::Skipped(count))
+                } else if status == TryRecvError::Disconnected {
+                    self.terminal.try_recv().ok()
+                } else {
+                    None
+                }
+            }
         }
     }
     pub fn stop(&self) {
@@ -88,7 +111,13 @@ impl Session {
         self.control.pause.fetch_xor(true, Ordering::AcqRel);
     }
     pub fn running(&self) -> bool {
-        !self.control.finished.load(Ordering::Acquire)
+        !self.worker.is_finished()
+    }
+    pub fn active(&self) -> bool {
+        self.running()
+            || !self.rx.is_empty()
+            || !self.terminal.is_empty()
+            || self.control.skipped.load(Ordering::Acquire) != 0
     }
 }
 impl Drop for Session {
@@ -104,7 +133,9 @@ fn emit(tx: &Sender<Event>, ctl: &Control, mut event: Event) -> bool {
         0
     };
     if bytes > PENDING_BYTES {
-        let _ = tx.try_send(Event::Skipped);
+        // Counting outside the queue also preserves omissions when Stop arrives
+        // while the UI or a CLI export is still draining a full queue.
+        ctl.skipped.fetch_add(1, Ordering::Release);
         return true;
     }
     if bytes > 0 {
@@ -175,6 +206,9 @@ pub fn safe_properties(source: &Properties) -> Properties {
         ("offset.store.method", "broker".into()),
         ("enable.auto.offset.store", "false".into()),
         ("allow.auto.create.topics", "false".into()),
+        // An unverified version must never imply support for Metadata v4.
+        ("api.version.request", "true".into()),
+        ("broker.version.fallback", "0.10.0".into()),
         ("enable.partition.eof", "true".into()),
         ("auto.offset.reset", "error".into()),
         ("socket.timeout.ms", "5000".into()),
@@ -195,6 +229,15 @@ pub fn safe_properties(source: &Properties) -> Properties {
         .or_insert_with(|| "true".into());
     p.entry("ssl.endpoint.identification.algorithm".into())
         .or_insert_with(|| "https".into());
+    if p.get("security.protocol")
+        .is_some_and(|v| v.to_ascii_uppercase().starts_with("SASL"))
+    {
+        let mechanism = p
+            .remove("sasl.mechanism")
+            .or_else(|| p.get("sasl.mechanisms").cloned())
+            .unwrap_or_else(|| "PLAIN".into());
+        p.insert("sasl.mechanisms".into(), mechanism.to_ascii_uppercase());
+    }
     p
 }
 
@@ -208,6 +251,9 @@ fn timeout(deadline: Instant) -> Result<Duration, String> {
 }
 
 fn real(req: &Request, tx: &Sender<Event>, ctl: &Control) -> Result<String, String> {
+    if !metadata_guard_available() {
+        return Err("This build lacks the Kafka Metadata v4 safety guard; use the Linux or Windows GNU build".into());
+    }
     if req.topic.trim().is_empty() {
         return Err("Enter the exact topic name".into());
     }
@@ -221,28 +267,19 @@ fn real(req: &Request, tx: &Sender<Event>, ctl: &Control) -> Result<String, Stri
     if req.props.contains_key("sasl.jaas.config") {
         return Err("This is a librdkafka client. Replace Java sasl.jaas.config with sasl.username and sasl.password in session properties.".into());
     }
-    if req
-        .props
-        .get("security.protocol")
-        .is_some_and(|v| v.to_uppercase().starts_with("SASL"))
+    let p = safe_properties(&req.props);
+    if p.get("security.protocol")
+        .is_some_and(|v| v.to_ascii_uppercase().starts_with("SASL"))
+        && !matches!(
+            p.get("sasl.mechanisms").map(String::as_str),
+            Some("PLAIN" | "SCRAM-SHA-256" | "SCRAM-SHA-512")
+        )
     {
-        let mechanism = req
-            .props
-            .get("sasl.mechanism")
-            .or_else(|| req.props.get("sasl.mechanisms"))
-            .map(|v| v.to_uppercase())
-            .unwrap_or_else(|| "PLAIN".into());
-        if !matches!(
-            mechanism.as_str(),
-            "PLAIN" | "SCRAM-SHA-256" | "SCRAM-SHA-512"
-        ) {
-            return Err(
-                "This prototype supports only SASL PLAIN, SCRAM-SHA-256 and SCRAM-SHA-512".into(),
-            );
-        }
+        return Err(
+            "This prototype supports only SASL PLAIN, SCRAM-SHA-256 and SCRAM-SHA-512".into(),
+        );
     }
     state(tx, ctl, "CONNECTING", "Inspecting only the supplied topic…");
-    let p = safe_properties(&req.props);
     let mut config = ClientConfig::new();
     for (k, v) in &p {
         config.set(k, v);
@@ -253,7 +290,11 @@ fn real(req: &Request, tx: &Sender<Event>, ctl: &Control) -> Result<String, Stri
     let deadline = Instant::now() + Duration::from_secs(20);
     let metadata = consumer
         .fetch_metadata(Some(&req.topic), timeout(deadline)?)
-        .map_err(|e| format!("Topic metadata failed: {e}"))?;
+        .map_err(|e| match e {
+            KafkaError::MetadataFetch(RDKafkaErrorCode::UnsupportedFeature) =>
+                "Kafka Reader requires Metadata v4 or newer (Kafka 0.11+) to prevent topic auto-creation".to_string(),
+            other => format!("Topic metadata failed: {other}"),
+        })?;
     if ctl.stop.load(Ordering::Acquire) {
         return Ok("Stopped".into());
     }
@@ -312,13 +353,7 @@ fn real(req: &Request, tx: &Sender<Event>, ctl: &Control) -> Result<String, Stri
         let found = consumer
             .offsets_for_times(times, timeout(deadline)?)
             .map_err(|e| format!("Timestamp lookup failed: {e}"))?;
-        for e in found.elements() {
-            if let Offset::Offset(o) = e.offset() {
-                if o >= 0 {
-                    time_offsets.insert(e.partition(), o);
-                }
-            }
-        }
+        time_offsets = timestamp_offsets(&found)?;
     }
     let mut assignment = TopicPartitionList::new();
     let mut positions = BTreeMap::new();
@@ -445,6 +480,24 @@ fn real(req: &Request, tx: &Sender<Event>, ctl: &Control) -> Result<String, Stri
     Ok(format!("Snapshot complete · {fetched} fetched"))
 }
 
+fn timestamp_offsets(found: &TopicPartitionList) -> Result<BTreeMap<i32, i64>, String> {
+    let mut offsets = BTreeMap::new();
+    for e in found.elements() {
+        e.error().map_err(|err| {
+            format!(
+                "Timestamp lookup failed for partition {}: {err}",
+                e.partition()
+            )
+        })?;
+        if let Offset::Offset(o) = e.offset() {
+            if o >= 0 {
+                offsets.insert(e.partition(), o);
+            }
+        }
+    }
+    Ok(offsets)
+}
+
 fn demo(req: &Request, tx: &Sender<Event>, ctl: &Control) -> Result<String, String> {
     let selected = if req.partitions.is_empty() {
         vec![0, 1, 2]
@@ -539,6 +592,123 @@ fn demo(req: &Request, tx: &Sender<Event>, ctl: &Control) -> Result<String, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn request() -> Request {
+        Request {
+            props: Properties::new(),
+            topic: "test.events".into(),
+            partitions: vec![0],
+            mode: Mode::Earliest,
+            value: 0,
+            follow: false,
+            max_records: 1,
+            seconds: 5,
+            demo: true,
+            inspect: false,
+        }
+    }
+
+    #[test]
+    fn a_full_queue_preserves_failure_after_the_last_data_event() {
+        // The dummy source emits its bounds, filling the single slot, and
+        // then fails validation of the starting offset.
+        let session = Session::start_with_capacity(
+            Request {
+                mode: Mode::Offset,
+                value: 999,
+                ..request()
+            },
+            1,
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while session.running() {
+            assert!(
+                Instant::now() < deadline,
+                "Worker blocked on terminal delivery"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(session.active());
+        assert!(matches!(session.try_next(), Some(Event::Metadata(_))));
+        assert!(session.active());
+        assert!(matches!(session.try_next(), Some(Event::State(state, _)) if state == "FAILED"));
+        assert!(!session.active());
+    }
+
+    #[test]
+    fn oversized_records_are_counted_even_if_the_queue_is_full() {
+        let (tx, _rx) = bounded(1);
+        tx.try_send(Event::Progress(1)).unwrap();
+        let ctl = Control::default();
+        let mut oversized = demo_record(0, 0, "test.events", 0);
+        oversized.value = Some(vec![0; PENDING_BYTES + 1]);
+        let record = Arc::new(oversized);
+        for _ in 0..3 {
+            assert!(emit(&tx, &ctl, Event::Record(record.clone())));
+        }
+        assert_eq!(ctl.skipped.load(Ordering::Acquire), 3);
+        assert_eq!(ctl.queued_bytes.load(Ordering::Acquire), 0);
+    }
+
+    #[cfg(guarded_kafka_metadata)]
+    #[test]
+    fn legacy_metadata_broker_cannot_create_the_requested_topic() {
+        use rdkafka::{mocking::MockCluster, types::RDKafkaApiKey};
+        let cluster = MockCluster::new(1).unwrap();
+        cluster
+            .apiversion(RDKafkaApiKey::Metadata, Some(0), Some(3))
+            .unwrap();
+        let req = Request {
+            demo: false,
+            inspect: true,
+            props: Properties::from([("bootstrap.servers".into(), cluster.bootstrap_servers())]),
+            ..request()
+        };
+        let (tx, _rx) = bounded(4);
+        let error = real(&req, &tx, &Control::default()).unwrap_err();
+        assert!(error.contains("Metadata v4"), "{error}");
+        // The mock auto-creates a named topic for Metadata v0-v3. Creation
+        // succeeds here only if our inspection never reached it by name.
+        cluster.create_topic(&req.topic, 1, 1).unwrap();
+    }
+
+    #[test]
+    fn timestamp_lookup_errors_are_distinct_from_missing_timestamps() {
+        let mut found = TopicPartitionList::new();
+        found
+            .add_partition_offset("test.events", 0, Offset::Invalid)
+            .unwrap();
+        found
+            .add_partition_offset("test.events", 1, Offset::Offset(42))
+            .unwrap();
+        assert_eq!(
+            timestamp_offsets(&found).unwrap(),
+            BTreeMap::from([(1, 42)])
+        );
+        // SAFETY: our owned list has two initialized entries. This reproduces
+        // librdkafka's result with an errored partition and its input offset.
+        unsafe {
+            (*(*found.ptr()).elems.add(1)).err =
+                rdkafka::bindings::rd_kafka_resp_err_t::RD_KAFKA_RESP_ERR_LEADER_NOT_AVAILABLE;
+        }
+        assert!(
+            timestamp_offsets(&found)
+                .unwrap_err()
+                .contains("partition 1")
+        );
+    }
+
+    #[test]
+    fn applied_sasl_settings_use_the_validated_mechanism() {
+        let mut props = parse_properties("security.protocol=SASL_SSL").unwrap();
+        assert_eq!(safe_properties(&props)["sasl.mechanisms"], "PLAIN");
+        props.insert("sasl.mechanisms".into(), "scram-sha-256".into());
+        assert_eq!(safe_properties(&props)["sasl.mechanisms"], "SCRAM-SHA-256");
+        props.insert("sasl.mechanism".into(), "scram-sha-512".into());
+        let applied = safe_properties(&props);
+        assert_eq!(applied["sasl.mechanisms"], "SCRAM-SHA-512");
+        assert!(!applied.contains_key("sasl.mechanism"));
+    }
+
     #[test]
     fn readonly_cannot_be_overridden() {
         let p=parse_properties("group.id=production\nenable.auto.commit=true\nenable.auto.offset.store=true\nallow.auto.create.topics=true\nplugin.library.paths=evil.so").unwrap();
@@ -556,21 +726,13 @@ mod tests {
     #[test]
     fn offline_read_honors_limit() {
         let req = Request {
-            props: Properties::new(),
-            topic: "demo".into(),
-            partitions: vec![0],
-            mode: Mode::Earliest,
-            value: 0,
-            follow: false,
             max_records: 7,
-            seconds: 5,
-            demo: true,
-            inspect: false,
+            ..request()
         };
         let s = Session::start(req);
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut count = 0;
-        while s.running() || !s.rx.is_empty() {
+        while s.active() {
             if let Some(Event::Record(_)) = s.try_next() {
                 count += 1;
             } else {

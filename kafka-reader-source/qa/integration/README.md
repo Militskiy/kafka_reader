@@ -8,7 +8,7 @@ The mutation operations in `FixtureHost.java` create test topics, ACLs, syntheti
 
 - Java/JDK 21 or later, Maven 3.9 or later and Python 3.
 - The prototype executable built for the machine on which you run these checks.
-- Local ports 19092, 19093 and 19094 free.
+- Three available loopback ports. The runner selects them for each run.
 - Network access for the initial Maven dependency download.
 
 From this directory:
@@ -19,11 +19,20 @@ python3 run-integration.py --app csharp --exe /absolute/path/to/KafkaReader
 python3 run-integration.py --app rust --exe /absolute/path/to/kafka-reader-rust
 ```
 
-Run the two test invocations sequentially: each replaces this fixture's generated `work/broker-data` directory. This directory is not a production Kafka data directory. Do not repoint it at an existing broker's storage.
+On Windows, set `JAVA_HOME` to a JDK 21+ installation. From this directory,
+run `mvn.cmd dependency:build-classpath "-Dmdep.outputFile=broker-classpath.txt"`,
+then `python run-integration.py --app rust --exe ..\..\dist\v0.3.0\kafka-reader.exe`.
 
-The wrapper starts and stops the broker and fixture helper, invokes the prototype's actual headless reader entry point, and checks the exported JSONL bytes and broker state. It leaves logs, JSONL exports and an `integration-report.json` beneath `work/<language>/`.
+Each invocation creates a new directory under `work/run-*` and prints its
+path. It formats temporary broker storage with a random cluster ID and
+generates fresh credentials for the administrative and restricted accounts.
+The helper checks the cluster ID through both client listeners before it seeds
+data. The runner stops its child processes and removes its client profiles
+and temporary broker storage when it exits. Logs, JSONL exports, and the per-language
+`integration-report.json` stay in that run's directory.
 
-The fixture credentials are intentional dummy values used only on the local test listener. Application profiles must use native librdkafka properties (`sasl.username`, `sasl.password`, TLS PEM/CA paths), not the Java client's `sasl.jaas.config` or JKS truststore settings.
+The generated credentials belong to that disposable broker. The Rust reader
+uses native librdkafka properties such as `sasl.username` and `sasl.password`.
 
 ## Read-only check through the Sondahub bridge
 

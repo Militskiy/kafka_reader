@@ -22,6 +22,58 @@ pub enum Poll {
     Empty,
 }
 
+pub(crate) fn metadata_guard_available() -> bool {
+    #[cfg(guarded_kafka_metadata)]
+    {
+        // Keep the wrapper (and its __real_ relocation) reachable even if
+        // another binary links this crate without our build.rs linker flag.
+        // A linker that doesn't supply --wrap must fail to resolve __real_.
+        std::hint::black_box(__wrap_rd_kafka_broker_ApiVersion_supported as *const ());
+    }
+    cfg!(guarded_kafka_metadata)
+}
+
+// librdkafka 2.16.0 negotiates a Metadata request down to v0, even when
+// allow.auto.create.topics=false was explicitly requested. v4 is the first
+// request that can encode the flag. Set a floor on the wire format chosen by
+// rd_kafka_MetadataRequest0, including on reconnects. Before transmission
+// rd_kafka_send independently checks the version against the actual broker's
+// ApiVersions and completes unsupported requests locally with UNSUPPORTED_FEATURE.
+#[cfg(guarded_kafka_metadata)]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __wrap_rd_kafka_broker_ApiVersion_supported(
+    broker: *mut c_void,
+    api_key: i16,
+    min_version: i16,
+    max_version: i16,
+    features: *mut std::ffi::c_int,
+) -> i16 {
+    unsafe extern "C" {
+        fn __real_rd_kafka_broker_ApiVersion_supported(
+            broker: *mut c_void,
+            api_key: i16,
+            min_version: i16,
+            max_version: i16,
+            features: *mut std::ffi::c_int,
+        ) -> i16;
+    }
+    // SAFETY: the linker forwards the unmodified C arguments to this wrapper.
+    let version = unsafe {
+        __real_rd_kafka_broker_ApiVersion_supported(
+            broker,
+            api_key,
+            min_version,
+            max_version,
+            features,
+        )
+    };
+    if api_key == rdkafka::types::RDKafkaApiKey::Metadata as i16 {
+        version.max(4)
+    } else {
+        version
+    }
+}
+
 pub struct DirectConsumer<'a> {
     owner: &'a BaseConsumer,
     topic: String,

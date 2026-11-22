@@ -1,5 +1,6 @@
 use super::*;
 use std::fs;
+use std::io::Write;
 
 pub(super) struct ServerEditor {
     original: Server,
@@ -185,10 +186,9 @@ impl ServerEditor {
             let mut properties = server.properties;
             properties.insert("reader.topic".into(), self.test_topic.clone());
             let path = PathBuf::from(&self.file_path);
-            if path.exists() {
-                return Err("Choose a new filename; existing profiles are not overwritten".into());
-            }
-            fs::write(&path, profile_text(&properties)).map_err(|e| e.to_string())
+            create_export(&path)?
+                .write_all(profile_text(&properties).as_bytes())
+                .map_err(|e| e.to_string())
         })();
         self.message = match result {
             Ok(()) => "Exported this profile without session credentials".into(),
@@ -215,6 +215,7 @@ pub(super) struct TopicEditor {
 }
 pub(super) struct ExportEditor {
     pub path: String,
+    pub records: Vec<Arc<Record>>,
 }
 #[derive(Clone, Copy, PartialEq)]
 enum Action {
@@ -259,20 +260,40 @@ impl ReaderApp {
         if self.running() {
             return Err("Stop reading before saving server changes".into());
         }
-        let (server, credentials) = editor.build()?;
+        let (mut server, credentials) = editor.build()?;
         let mut proposed = self.workspace.clone();
-        if let Some(old) = proposed.server_mut(server.id) {
-            *old = server.clone();
-        } else {
+        if editor.is_new {
             proposed.servers.push(server.clone());
+        } else {
+            let old = proposed
+                .server_mut(server.id)
+                .ok_or("Server is unavailable")?;
+            // The parent window can register or star topics while this draft is open.
+            server.topics.clone_from(&old.topics);
+            if !editor.test_topic.trim().is_empty() {
+                server.register_topic(editor.test_topic.trim())?;
+            }
+            *old = server.clone();
         }
         proposed.selected_server = server.id;
+        let initial_tab = if editor.is_new {
+            server.topics.first().map(|topic| Tab {
+                server: server.id,
+                topic: topic.name.clone(),
+            })
+        } else {
+            None
+        };
+        if let Some(tab) = &initial_tab {
+            proposed.open_tab(tab.clone(), false)?;
+        }
         proposed.validate()?;
         // Save the sanitized model before committing the draft into the live workspace.
         if self.persistence_error.is_some() {
             return Err("Repair or move the invalid workspace file before saving a server".into());
         }
-        self.store.save(&proposed)?;
+        self.options.store.save(&proposed)?;
+        let previous = self.active().cloned();
         self.workspace = proposed;
         self.credentials.insert(server.id, credentials);
         for (tab, view) in &mut self.cached {
@@ -280,17 +301,11 @@ impl ReaderApp {
                 *view = TopicView::new(&self.workspace.settings);
             }
         }
-        if self.active().is_some_and(|t| t.server == server.id) {
+        if let Some(tab) = initial_tab {
+            self.switch_view(previous, &tab);
+        } else if self.active().is_some_and(|t| t.server == server.id) {
             self.view = TopicView::new(&self.workspace.settings);
             self.session = None;
-        }
-        if editor.is_new {
-            if let Some(topic) = server.topics.first() {
-                self.activate(Tab {
-                    server: server.id,
-                    topic: topic.name.clone(),
-                })?;
-            }
         }
         self.notice =
             "Server saved. Credentials stay in this session; no connection was started.".into();
@@ -515,7 +530,7 @@ impl ReaderApp {
                 },
             );
             if action == Action::Save {
-                self.export_to(PathBuf::from(editor.path));
+                self.export_to(editor);
             } else if action == Action::None {
                 self.export_editor = Some(editor);
             }
@@ -540,6 +555,150 @@ fn section(ui: &mut egui::Ui, title: &str, dark: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn test_app() -> ReaderApp {
+        let cc = eframe::CreationContext::_new_kittest(egui::Context::default());
+        ReaderApp::new(
+            &cc,
+            Options {
+                light: false,
+                compact: false,
+                screenshot: None,
+                screenshot_dir: None,
+                smoke: false,
+                reopen: None,
+                close_after: None,
+                store: Store::for_gui(None, true).unwrap(),
+            },
+        )
+    }
+
+    #[test]
+    fn ninth_tab_failure_leaves_the_new_server_draft_uncommitted() {
+        let mut app = test_app();
+        let mut server = Server {
+            id: 1,
+            name: "Existing".into(),
+            offline: false,
+            properties: Properties::from([("bootstrap.servers".into(), "localhost:9092".into())]),
+            topics: vec![],
+        };
+        for i in 0..MAX_TABS {
+            server.register_topic(&format!("events-{i}")).unwrap();
+        }
+        app.workspace.servers.push(server);
+        for i in 0..MAX_TABS {
+            app.activate(Tab {
+                server: 1,
+                topic: format!("events-{i}"),
+            })
+            .unwrap();
+        }
+        let before = fs::read(app.options.store.path()).unwrap();
+        app.open_server(None);
+        let mut editor = app.server_editor.take().unwrap();
+        editor.name = "New".into();
+        editor.brokers = "localhost:9092".into();
+        editor.test_topic = "new.events".into();
+        assert!(
+            app.save_server(&editor)
+                .unwrap_err()
+                .contains("Eight topic tabs")
+        );
+        assert_eq!(app.workspace.servers.len(), 1);
+        assert_eq!(app.workspace.tabs.len(), MAX_TABS);
+        assert!(app.credentials.is_empty());
+        assert_eq!(fs::read(app.options.store.path()).unwrap(), before);
+    }
+
+    #[test]
+    fn export_keeps_the_rows_visible_when_its_dialog_opened() {
+        let mut app = test_app();
+        app.view.buffer.add(Arc::new(demo_record(0, 7, "first", 0)));
+        app.open_export("first");
+        let mut editor = app.export_editor.take().unwrap();
+        assert_eq!(editor.path, "first-records.jsonl");
+        let path = app.options.store.directory.join("result.jsonl");
+        editor.path = path.to_str().unwrap().into();
+        app.view = TopicView::new(&app.workspace.settings);
+        app.view
+            .buffer
+            .add(Arc::new(demo_record(0, 9, "second", 0)));
+        app.export_to(editor);
+        assert!(matches!(
+            app.jobs_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Job::Exported(_)
+        ));
+        let bytes = fs::read(&path).unwrap();
+        let row: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(row["topic"], "first");
+        assert_eq!(row["offset"], 7);
+        assert!(export(&path, &[]).is_err());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn profile_export_refuses_to_overwrite_an_existing_file() {
+        let mut app = test_app();
+        app.open_server(None);
+        let mut editor = app.server_editor.take().unwrap();
+        editor.name = "Profile".into();
+        editor.brokers = "localhost:9092".into();
+        let path = app.options.store.directory.join("export.properties");
+        editor.file_path = path.to_str().unwrap().into();
+        fs::write(&path, "original contents").unwrap();
+        editor.export();
+        assert!(editor.message.starts_with("Export failed"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "original contents");
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn appearance_changes_preserve_read_controls_and_new_defaults_reach_untouched_tabs() {
+        let mut app = test_app();
+        app.view.max_records = 1;
+        app.view.seconds = 6;
+        app.view.start_value = "3".into();
+        let idle = Tab {
+            server: 1,
+            topic: "idle".into(),
+        };
+        app.cached
+            .insert(idle.clone(), TopicView::new(&app.workspace.settings));
+        let mut settings = app.workspace.settings.clone();
+        settings.dark = !settings.dark;
+        let ctx = egui::Context::default();
+        app.apply_settings(settings.clone(), &ctx).unwrap();
+        assert_eq!(
+            (
+                app.view.max_records,
+                app.view.seconds,
+                app.view.start_value.as_str()
+            ),
+            (1, 6, "3")
+        );
+        settings.max_records = 500;
+        settings.seconds = 10;
+        settings.recent_window = 8;
+        app.apply_settings(settings, &ctx).unwrap();
+        let idle_view = &app.cached[&idle];
+        assert_eq!(
+            (
+                idle_view.max_records,
+                idle_view.seconds,
+                idle_view.start_value.as_str()
+            ),
+            (500, 10, "8")
+        );
+        assert_eq!(
+            (
+                app.view.max_records,
+                app.view.seconds,
+                app.view.start_value.as_str()
+            ),
+            (1, 6, "3")
+        );
+    }
     #[test]
     fn typed_auth_tls_and_advanced_produce_native_settings() {
         let server = Server {

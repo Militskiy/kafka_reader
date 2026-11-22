@@ -47,6 +47,18 @@ automatic offset storage, and automatic topic creation off. These settings
 override imported values. The low-level topic configuration also disables
 legacy commits and uses broker offset storage to avoid local offset files.
 
+Exact-topic reads require Kafka Metadata v4 or newer (Apache Kafka 0.11+).
+Earlier requests omit the field that disables topic creation. The Linux and
+Windows GNU builds statically link librdkafka 2.16.0 and wrap its internal
+`rd_kafka_broker_ApiVersion_supported` function in
+[build.rs](../build.rs) and [direct_consumer.rs](../src/direct_consumer.rs).
+For Metadata requests, the wrapper sets a v4 minimum on the request format.
+Before sending, librdkafka checks that format against the connected broker's
+advertised versions. This also protects automatic refreshes and reconnects.
+Other target configurations reject live connections. When upgrading librdkafka,
+verify the wrapped C signature and the independent pre-send version check,
+then run the legacy-broker regression and the disposable Kafka fixture.
+
 `BaseConsumer` owns the native client and supplies metadata, watermarks,
 timestamp lookup and pause/resume. Record delivery uses
 `rd_kafka_consume_start_queue` and `rd_kafka_consume_queue` at explicit offsets.
@@ -68,7 +80,8 @@ partitions, and captures their beginning and exclusive readable-end offsets.
 Those bounds determine earliest, recent-window, explicit-offset, timestamp and
 latest starts. A recent window counts offset positions per partition, not
 existing records. A timestamp with no matching offset starts at the captured
-end; it does not rewind to the beginning.
+end. A partition-level timestamp lookup error fails the request and identifies
+the affected partition.
 
 Finite reads exclude records beyond each captured end. Offsets can contain gaps;
 completion follows delivered positions and native partition EOF offsets instead
@@ -88,14 +101,17 @@ and paused time are excluded from the active reading-time budget.
 
 `Workspace` holds saved navigation; `TopicView` holds session data. Up to eight
 topic tabs share one active reader. A reader is considered active while its
-worker runs **or its event queue still contains events**. Switching context
-before the queue drains could place messages in the wrong tab.
+worker runs or it has pending events, a skipped-record count, or a terminal
+outcome. A separate one-shot channel preserves the terminal outcome even when
+the record queue fills. Consumers drain records and counts before observing
+the outcome. The CLI requires a completed outcome to report success.
 
 Idle views cache records, filters, selected-record references, sort/format
 choices and read controls. Editing a server clears its affected view caches so
 old data is not relabeled with a changed connection. Add/Edit server and App
 settings are real native viewports with drafts; Cancel discards the draft, and
-saving a server does not connect it.
+saving a server does not connect it. The draft's initial tab must fit before
+the server can be saved. Changing appearance preserves each tab's read limits.
 
 Records stay in an arrival-ordered `VecDeque`. Filtering and numeric sorting
 produce a separate vector of `Arc` references; they do not mutate retention
@@ -134,12 +150,16 @@ headers. Formatting never changes raw records.
 `Record::json` defines `kafka-reader-jsonl-v1`: metadata, Base64 key/value bytes,
 valid UTF-8 projections and ordered headers. Base64 is authoritative: JSON
 `null` represents a null array, while `""` represents an empty one. GUI export
-snapshots visible retained rows and refuses an existing filename; CLI export
-streams the read and overwrites its explicitly supplied output file.
+captures the visible rows and their order when the dialog opens. GUI record
+and profile exports create the destination file exclusively. CLI export streams
+the read and overwrites its explicitly supplied output file.
 
 ## Persistence and package identity
 
 `Store` loads/saves validated `workspace.json` through temporary-file replacement.
+Saves acquire an OS lock on `workspace.lock` and compare the on-disk bytes
+with the session's last snapshot. If another instance has saved edits, reopen
+the workspace before saving again.
 It persists profiles, registered topics, favorites, tab identities and settings;
 records, view filters/sorts and session credentials are not serialized.
 Usernames, passwords, tokens and inline private-key material stay in memory;
@@ -150,7 +170,8 @@ Normal startup is empty or restores saved real profiles without connecting.
 Migration removes profiles marked `offline` and their tabs, never profiles
 merely named Demo. Loading cleans the in-memory workspace; the cleaned state is
 written on the next normal save. Only explicit GUI QA creates a synthetic
-fixture, and Store excludes it when saving.
+fixture, and Store excludes it when saving. Smoke mode allocates a temporary
+directory by default and refuses an explicit directory containing a workspace.
 
 The displayed name is **Kafka Reader** and the distributed Windows file is
 `kafka-reader.exe`. The internal Cargo target and existing app-data directory

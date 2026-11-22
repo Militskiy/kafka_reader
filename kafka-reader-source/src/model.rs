@@ -207,8 +207,17 @@ pub fn pretty_json(bytes: Option<&[u8]>) -> String {
     }
 }
 
+pub fn create_export(path: &Path) -> Result<File, String> {
+    File::create_new(path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::AlreadyExists => {
+            "Choose a new output filename; the file already exists".into()
+        }
+        _ => e.to_string(),
+    })
+}
+
 pub fn export(path: &Path, records: &[Arc<Record>]) -> Result<(), String> {
-    let mut out = BufWriter::new(File::create(path).map_err(|e| e.to_string())?);
+    let mut out = BufWriter::new(create_export(path)?);
     for r in records {
         serde_json::to_writer(&mut out, &r.json()).map_err(|e| e.to_string())?;
         out.write_all(b"\n").map_err(|e| e.to_string())?;

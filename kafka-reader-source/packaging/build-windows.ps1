@@ -22,4 +22,4 @@ if ($LASTEXITCODE -ne 0) { throw 'Rust Windows build failed.' }
 $rustBuildDirectory = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { 'target' }
 python packaging/package.py --windows-exe (Join-Path $rustBuildDirectory 'x86_64-pc-windows-gnu/release/kafka-reader-rust.exe')
 if ($LASTEXITCODE -ne 0) { throw 'Portable ZIP packaging failed.' }
-Write-Host 'A genuine single EXE, Windows ZIP and source ZIP are in dist/v0.3.0/. No native companion DLLs are required. Windows execution still needs validation.'
+Write-Host 'Windows EXE, Windows ZIP and source ZIP are in dist/v0.3.0/. See docs/DEVELOPMENT.md for runtime checks on this build.'

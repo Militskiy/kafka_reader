@@ -2,10 +2,15 @@
 use crate::model::{Properties, secret_key};
 use serde::{Deserialize, Serialize};
 use std::{
+    cell::RefCell,
     collections::BTreeSet,
     fs,
-    io::Write,
+    io::{ErrorKind, Read, Write},
     path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 pub const MAX_TABS: usize = 8;
@@ -340,7 +345,21 @@ pub fn validate_topic(name: &str) -> Result<(), String> {
 #[derive(Clone)]
 pub struct Store {
     pub directory: PathBuf,
+    last_read: RefCell<Option<Vec<u8>>>,
+    _temporary: Option<Arc<SmokeDirectory>>,
 }
+
+struct SmokeDirectory(PathBuf);
+
+impl Drop for SmokeDirectory {
+    fn drop(&mut self) {
+        // Only implicit smoke directories belong to the app. Leave unrelated files alone.
+        let _ = fs::remove_file(self.0.join("workspace.json"));
+        let _ = fs::remove_file(self.0.join("workspace.lock"));
+        let _ = fs::remove_dir(&self.0);
+    }
+}
+
 impl Store {
     pub fn new(directory: Option<PathBuf>) -> Self {
         let directory = directory.unwrap_or_else(|| {
@@ -354,26 +373,69 @@ impl Store {
             base.unwrap_or_else(|| PathBuf::from("."))
                 .join("kafka-reader-rust")
         });
-        Self { directory }
+        Self {
+            directory,
+            last_read: RefCell::default(),
+            _temporary: None,
+        }
+    }
+    pub fn for_gui(directory: Option<PathBuf>, smoke: bool) -> Result<Self, String> {
+        if !smoke {
+            return Ok(Self::new(directory));
+        }
+        if let Some(directory) = directory {
+            let store = Self::new(Some(directory));
+            return match fs::symlink_metadata(store.path()) {
+                Ok(_) => Err(
+                    "GUI smoke requires a data directory without an existing workspace.json".into(),
+                ),
+                Err(e) if e.kind() == ErrorKind::NotFound => Ok(store),
+                Err(e) => Err(e.to_string()),
+            };
+        }
+        let root = std::env::temp_dir();
+        let path = loop {
+            let path = root.join(format!("kafka-reader-smoke-{}", temporary_suffix()));
+            match workspace_directory(false).create(&path) {
+                Ok(()) => break path,
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e.to_string()),
+            }
+        };
+        let mut store = Self::new(Some(path.clone()));
+        store._temporary = Some(Arc::new(SmokeDirectory(path)));
+        Ok(store)
     }
     pub fn path(&self) -> PathBuf {
         self.directory.join("workspace.json")
     }
-    pub fn load(&self) -> Result<Workspace, String> {
-        let path = self.path();
-        if !path.exists() {
-            return Ok(Workspace::default());
-        }
-        if fs::metadata(&path).map_err(|e| e.to_string())?.len() > 1024 * 1024 {
+    fn read_bytes(&self) -> Result<Option<Vec<u8>>, String> {
+        let file = match fs::File::open(self.path()) {
+            Ok(file) => file,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.to_string()),
+        };
+        let mut bytes = Vec::new();
+        file.take(1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > 1024 * 1024 {
             return Err("Workspace exceeds 1 MiB".into());
         }
+        Ok(Some(bytes))
+    }
+    pub fn load(&self) -> Result<Workspace, String> {
+        let Some(bytes) = self.read_bytes()? else {
+            *self.last_read.borrow_mut() = None;
+            return Ok(Workspace::default());
+        };
         let mut value: Workspace =
-            serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
-                .map_err(|e| format!("Cannot load workspace: {e}"))?;
+            serde_json::from_slice(&bytes).map_err(|e| format!("Cannot load workspace: {e}"))?;
         value.sanitize();
         value.validate()?;
         value.remove_offline_servers();
         value.validate()?;
+        *self.last_read.borrow_mut() = Some(bytes);
         Ok(value)
     }
     pub fn save(&self, workspace: &Workspace) -> Result<(), String> {
@@ -386,34 +448,67 @@ impl Store {
         if bytes.len() > 1024 * 1024 {
             return Err("Workspace exceeds 1 MiB".into());
         }
-        let mut directory = fs::DirBuilder::new();
-        directory.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            directory.mode(0o700);
-        }
-        directory
+        workspace_directory(true)
             .create(&self.directory)
             .map_err(|e| e.to_string())?;
-        atomic_write(&self.path(), &bytes)
+        // A separate, stable lock file serializes comparison and replacement across processes.
+        // Closing the handle releases its OS lock, including after a process exits unexpectedly.
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(self.directory.join("workspace.lock"))
+            .map_err(|e| e.to_string())?;
+        lock.try_lock()
+            .map_err(|e| format!("Could not lock the workspace for saving: {e}"))?;
+        if self.read_bytes()?.as_ref() != self.last_read.borrow().as_ref() {
+            return Err(
+                "The workspace changed on disk. Reopen it before saving this session.".into(),
+            );
+        }
+        atomic_write(&self.path(), &bytes)?;
+        *self.last_read.borrow_mut() = Some(bytes);
+        Ok(())
     }
 }
+
+fn workspace_directory(recursive: bool) -> fs::DirBuilder {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(recursive);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder
+}
+fn temporary_suffix() -> String {
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "{}-{}",
+        std::process::id(),
+        NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let temporary = path.with_extension(format!("tmp-{}-{nonce}", std::process::id()));
-    let result = (|| {
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let (temporary, mut file) = loop {
+        let temporary = path.with_extension(format!("tmp-{}", temporary_suffix()));
+        match options.open(&temporary) {
+            Ok(file) => break (temporary, file),
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.to_string()),
         }
-        let mut file = options.open(&temporary).map_err(|e| e.to_string())?;
+    };
+    let result = (|| {
         file.write_all(bytes)
             .and_then(|_| file.sync_all())
             .map_err(|e| e.to_string())?;
@@ -441,10 +536,89 @@ mod tests {
         workspace
     }
     fn store() -> Store {
-        Store::new(Some(std::env::temp_dir().join(
-            format!("kafka-workspace-{}-{}", std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()),
-        )))
+        Store::for_gui(None, true).unwrap()
+    }
+    #[test]
+    fn parallel_smoke_runs_get_distinct_directories() {
+        let barrier = std::sync::Barrier::new(8);
+        let stores = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        store()
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        let paths: BTreeSet<_> = stores.iter().map(|store| &store.directory).collect();
+        assert_eq!(paths.len(), stores.len());
+        assert!(paths.iter().all(|p| p.is_dir()));
+    }
+
+    #[test]
+    fn smoke_storage_is_isolated_and_refuses_an_existing_workspace() {
+        let temporary = Store::for_gui(None, true).unwrap();
+        let directory = temporary.directory.clone();
+        assert_ne!(directory, Store::new(None).directory);
+        let explicit = Store::for_gui(Some(directory.clone()), true).unwrap();
+        temporary.save(&workspace_with_server()).unwrap();
+        let original = fs::read(temporary.path()).unwrap();
+        assert!(Store::for_gui(Some(directory.clone()), true).is_err());
+        // Another instance created the workspace after this smoke store was prepared.
+        assert!(explicit.save(&Workspace::qa_fixture()).is_err());
+        assert_eq!(fs::read(temporary.path()).unwrap(), original);
+        drop(explicit);
+        assert!(directory.exists());
+        drop(temporary);
+        assert!(!directory.exists());
+    }
+
+    #[test]
+    fn competing_saves_keep_the_winning_snapshot_and_report_the_conflict() {
+        let owner = Store::for_gui(None, true).unwrap();
+        owner.save(&workspace_with_server()).unwrap();
+        let barrier = std::sync::Barrier::new(2);
+        let saved = std::thread::scope(|scope| {
+            let mut handles = vec![];
+            for name in ["First edit", "Second edit"] {
+                let store = Store::new(Some(owner.directory.clone()));
+                let mut workspace = store.load().unwrap();
+                workspace.servers[0].name = name.into();
+                let barrier = &barrier;
+                handles.push(scope.spawn(move || {
+                    barrier.wait();
+                    (name, store.save(&workspace))
+                }));
+            }
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        let winners: Vec<_> = saved.iter().filter(|(_, result)| result.is_ok()).collect();
+        assert_eq!(winners.len(), 1);
+        let stored = owner.load().unwrap();
+        assert_eq!(stored.servers[0].name, winners[0].0);
+        owner.save(&stored).unwrap();
+    }
+
+    #[test]
+    fn stale_sessions_cannot_overwrite_another_instances_edits() {
+        let owner = Store::for_gui(None, true).unwrap();
+        owner.save(&workspace_with_server()).unwrap();
+        let other = Store::new(Some(owner.directory.clone()));
+        let mut stale = other.load().unwrap();
+        let mut updated = owner.load().unwrap();
+        updated.servers[0].register_topic("new.events").unwrap();
+        owner.save(&updated).unwrap();
+        stale.servers[0].topics[0].favorite = false;
+        assert!(other.save(&stale).is_err());
+        assert_eq!(other.load().unwrap().servers, updated.servers);
     }
     #[test]
     fn secrets_never_reach_disk_and_workspace_roundtrips() {

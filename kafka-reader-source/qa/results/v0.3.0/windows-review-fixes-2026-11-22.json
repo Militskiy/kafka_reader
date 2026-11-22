@@ -1,0 +1,153 @@
+{
+  "date": "2026-11-22",
+  "application_version": "0.3.0",
+  "source": "Review fixes on 688dc49cfe6fb9bc32b7291b1f879fd10ee3ac6b, committed with this report",
+  "host": "Windows-11-10.0.26300-SP0",
+  "target": "x86_64-pc-windows-gnu",
+  "rustc": "1.100.0",
+  "mingw_w64_gcc": "16.2.0",
+  "binary": {
+    "file": "kafka-reader.exe",
+    "bytes": 18216960,
+    "sha256": "7edd02a1268f8ad3e43b21e9bb5dcaf9f4670cad3281e4a7e3bcbcc53619e4f7",
+    "imports": [
+      "advapi32.dll",
+      "api-ms-win-core-synch-l1-2-0.dll",
+      "bcryptprimitives.dll",
+      "crypt32.dll",
+      "dwmapi.dll",
+      "gdi32.dll",
+      "imm32.dll",
+      "kernel32.dll",
+      "msvcrt.dll",
+      "ntdll.dll",
+      "ole32.dll",
+      "opengl32.dll",
+      "secur32.dll",
+      "shell32.dll",
+      "user32.dll",
+      "uxtheme.dll",
+      "ws2_32.dll"
+    ]
+  },
+  "checks": {
+    "format": {
+      "command": "cargo fmt --check",
+      "exit_code": 0
+    },
+    "build": {
+      "command": ".\\packaging\\build-windows.ps1",
+      "exit_code": 0
+    },
+    "release_tests": {
+      "command": "cargo test --locked --release --target x86_64-pc-windows-gnu",
+      "library_passed": 31,
+      "application_passed": 15,
+      "failed": 0,
+      "ignored": 0
+    },
+    "offline_self_test": {
+      "command": "kafka-reader.exe --self-test",
+      "path_environment": "Windows and System32 only",
+      "checks": 9,
+      "librdkafka": "2.16.0",
+      "selfTest": "PASS"
+    },
+    "sondahub_bridge": {
+      "runner": "qa/integration/run-bridge-check.py",
+      "node_runtime": "22",
+      "bootstrap": "127.0.0.1:9192",
+      "topic": "fleet.telemetry",
+      "partitions": 6,
+      "records": 1,
+      "skipped": 0,
+      "state": "COMPLETED",
+      "process_exited": true,
+      "listeners_on_9192_after_run": 0
+    },
+    "disposable_kafka": {
+      "app": "rust",
+      "status": "PASS",
+      "count": 20,
+      "checks": [
+        "Explicit-topic metadata returns three partitions and exact bounds",
+        "Finite earliest snapshot reads all 60 records",
+        "Binary payloads and ordered duplicate/null/empty headers survive the broker round trip",
+        "Null tombstones remain distinct from zero-byte values",
+        "Recent window is five offset positions per partition",
+        "Selected partition and explicit offset work",
+        "Record limit is exact inside a fetched batch",
+        "Timestamp seek reads the requested range",
+        "Timestamp after the readable end returns zero records without rewinding",
+        "Finite snapshot excludes an arrival after captured end offsets",
+        "Latest-follow mode reads a new arrival",
+        "SASL/PLAIN topic-only account can read without consumer-group access",
+        "The restricted account is explicitly denied consumer-group commits",
+        "Unauthorized topic returns a controlled failure",
+        "Wrong password returns a controlled failure",
+        "Existing group offsets remain unchanged despite imported commit/group settings",
+        "Reader sessions create no consumer groups",
+        "JSONL export preserves null keys and Unicode values",
+        "read_committed skips aborted records and completes across transaction-marker gaps",
+        "Finite snapshot completes at the last stable offset while a transaction remains open"
+      ],
+      "fixture": "Apache Kafka 4.1.2, local KRaft, topic-only SASL/PLAIN reader",
+      "completed_at_utc": "2026-11-22T19:19:15.555170+00:00",
+      "tested_platform": "Windows-11-10.0.26300-SP0",
+      "binary_sha256": {
+        "kafka-reader.exe": "7edd02a1268f8ad3e43b21e9bb5dcaf9f4670cad3281e4a7e3bcbcc53619e4f7"
+      }
+    },
+    "fixture_cleanup": {
+      "remaining_temporary_cluster_directories": 0,
+      "remaining_client_profiles": 0
+    },
+    "native_gui": {
+      "implicit_temporary_workspace": {
+        "appVersion": "0.3.0",
+        "checks": 47,
+        "guiSmoke": "PASS",
+        "nativeChildViewport": true,
+        "openTabs": 4,
+        "retained": 120
+      },
+      "explicit_fresh_workspace": {
+        "appVersion": "0.3.0",
+        "checks": 47,
+        "guiSmoke": "PASS",
+        "nativeChildViewport": true,
+        "openTabs": 4,
+        "retained": 120
+      },
+      "reopen_new_process": {
+        "appVersion": "0.3.0",
+        "checks": 15,
+        "credentialsRestored": false,
+        "guiReopen": "PASS",
+        "offlineServersRestored": 0,
+        "realServersRestored": 1,
+        "recordsRestored": 0,
+        "sessionStarted": false
+      },
+      "explicit_preexisting_workspace_exit_code": 1,
+      "default_workspace_sentinel_unchanged": true,
+      "screenshots_reviewed": [
+        "rust-main.png",
+        "rust-reopened.png"
+      ]
+    },
+    "fixture_isolation_tests": {
+      "file": "qa/integration/test_fixture_isolation.py",
+      "passed": 4
+    },
+    "packaging_tests": {
+      "file": "packaging/test_package.py",
+      "passed": 1
+    }
+  },
+  "outside_this_run": [
+    "Linux rebuild and execution",
+    "Manual keyboard, mouse and clipboard acceptance on Windows",
+    "Live TLS, mTLS and SCRAM"
+  ]
+}

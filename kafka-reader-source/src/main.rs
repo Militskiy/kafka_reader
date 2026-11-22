@@ -161,7 +161,10 @@ fn run() -> Result<(), String> {
         screenshot_dir: values.get("--screenshot-dir").map(PathBuf::from),
         reopen: values.get("--gui-check-reopen").map(PathBuf::from),
         close_after,
-        data_dir: values.get("--data-dir").map(PathBuf::from),
+        store: kafka_reader_rust::workspace::Store::for_gui(
+            values.get("--data-dir").map(PathBuf::from),
+            flags.contains("--gui-smoke"),
+        )?,
     };
     eframe::run_native(
         "Kafka Reader",
@@ -223,7 +226,7 @@ fn headless(request: Request, path: Option<PathBuf>) -> Result<(), String> {
     let mut state = "CONNECTING".to_string();
     let mut detail = String::new();
     let mut metadata = Vec::new();
-    while s.running() || !s.rx.is_empty() {
+    while s.active() {
         if let Some(event) = s.try_next() {
             match event {
                 Event::Metadata(m) => metadata = m,
@@ -234,7 +237,7 @@ fn headless(request: Request, path: Option<PathBuf>) -> Result<(), String> {
                         out.write_all(b"\n").map_err(|e| e.to_string())?;
                     }
                 }
-                Event::Skipped => skipped += 1,
+                Event::Skipped(count) => skipped += count,
                 Event::State(name, text) => {
                     eprintln!("{name}: {text}");
                     state = name;
@@ -262,10 +265,12 @@ fn headless(request: Request, path: Option<PathBuf>) -> Result<(), String> {
             "rdkafkaVersion": rdkafka::util::get_rdkafka_version().1
         })
     );
-    if state == "FAILED" {
-        Err(detail)
-    } else {
-        Ok(())
+    match state.as_str() {
+        "COMPLETED" => Ok(()),
+        "FAILED" | "STOPPED" => Err(detail),
+        _ => Err(format!(
+            "Reader exited without a terminal result (last state: {state})"
+        )),
     }
 }
 fn self_test() -> Result<(), String> {

@@ -27,7 +27,7 @@ pub struct Options {
     pub smoke: bool,
     pub reopen: Option<PathBuf>,
     pub close_after: Option<u64>,
-    pub data_dir: Option<PathBuf>,
+    pub store: Store,
 }
 
 enum Job {
@@ -131,7 +131,6 @@ impl TopicView {
 
 pub struct ReaderApp {
     workspace: Workspace,
-    store: Store,
     persistence_error: Option<String>,
     credentials: BTreeMap<u64, Properties>,
     view: TopicView,
@@ -158,16 +157,16 @@ pub struct ReaderApp {
 impl ReaderApp {
     pub fn new(cc: &eframe::CreationContext<'_>, options: Options) -> Self {
         cc.egui_ctx.set_embed_viewports(false);
-        let store = Store::new(options.data_dir.clone());
-        let (mut workspace, persistence_error) = match store.load() {
-            Ok(w) => (w, None),
-            Err(e) => (Workspace::default(), Some(e)),
+        let (mut workspace, persistence_error) = if options.smoke {
+            // Smoke always starts fresh. Its first save also checks that the destination
+            // was not populated between store preparation and GUI startup.
+            (Workspace::qa_fixture(), None)
+        } else {
+            match options.store.load() {
+                Ok(w) => (w, None),
+                Err(e) => (Workspace::default(), Some(e)),
+            }
         };
-        // Only the explicit QA command creates an in-memory synthetic fixture.
-        // A normal first launch is empty; existing real server profiles are restored.
-        if options.smoke {
-            workspace = Workspace::qa_fixture();
-        }
         if options.light {
             workspace.settings.dark = false;
         }
@@ -183,7 +182,6 @@ impl ReaderApp {
             .unwrap_or_default();
         let mut app = Self {
             workspace,
-            store,
             persistence_error,
             credentials: BTreeMap::new(),
             view,
@@ -232,9 +230,7 @@ impl ReaderApp {
         self.server().is_some_and(|s| s.offline)
     }
     fn running(&self) -> bool {
-        self.session
-            .as_ref()
-            .is_some_and(|session| session.running() || !session.rx.is_empty())
+        self.session.as_ref().is_some_and(Session::active)
     }
     fn modal_open(&self) -> bool {
         self.server_editor.is_some()
@@ -245,7 +241,7 @@ impl ReaderApp {
     fn persist(&mut self) {
         if self.persistence_error.is_some() {
             self.notice = "Workspace storage is unavailable. Session changes are kept in memory; repair or move workspace.json to restore saving.".into();
-        } else if let Err(e) = self.store.save(&self.workspace) {
+        } else if let Err(e) = self.options.store.save(&self.workspace) {
             self.notice = format!("Could not save workspace: {e}");
         }
     }
@@ -260,9 +256,14 @@ impl ReaderApp {
         }
         self.drain_reader(usize::MAX);
         self.workspace.open_tab(tab.clone(), false)?;
+        self.switch_view(previous, &tab);
+        self.persist();
+        Ok(())
+    }
+    fn switch_view(&mut self, previous: Option<Tab>, tab: &Tab) {
         let replacement = self
             .cached
-            .remove(&tab)
+            .remove(tab)
             .unwrap_or_else(|| TopicView::new(&self.workspace.settings));
         let prior = std::mem::replace(&mut self.view, replacement);
         if let Some(old) = previous {
@@ -270,12 +271,10 @@ impl ReaderApp {
             self.cache_order.retain(|k| k != &old);
             self.cache_order.push_back(old);
         }
-        self.cache_order.retain(|k| k != &tab);
+        self.cache_order.retain(|k| k != tab);
         self.session = None;
         self.notice.clear();
         self.enforce_budget();
-        self.persist();
-        Ok(())
     }
     fn close_tab(&mut self, tab: &Tab) -> Result<(), String> {
         let was_active = self.active() == Some(tab);
@@ -468,7 +467,7 @@ impl ReaderApp {
                     self.view.detail = detail;
                 }
                 Event::Progress(n) => self.view.fetched = n,
-                Event::Skipped => self.view.skipped += 1,
+                Event::Skipped(count) => self.view.skipped += count,
             }
         }
         self.enforce_budget();
@@ -546,19 +545,23 @@ impl ReaderApp {
             let _ = tx.send(Job::Formatted(key, generation, output));
         });
     }
-    fn export_to(&mut self, path: PathBuf) {
-        if self.exporting {
-            return;
-        }
+    fn open_export(&mut self, topic: &str) {
         let records = self.view.visible();
         if records.is_empty() {
             self.notice = "There are no visible retained records to export".into();
             return;
         }
-        if path.exists() {
-            self.notice = "Choose a new export filename; existing files are not overwritten".into();
+        self.export_editor = Some(ExportEditor {
+            path: format!("{topic}-records.jsonl"),
+            records,
+        });
+    }
+    fn export_to(&mut self, editor: ExportEditor) {
+        if self.exporting {
             return;
         }
+        let path = PathBuf::from(editor.path);
+        let records = editor.records;
         self.exporting = true;
         let tx = self.jobs_tx.clone();
         thread::spawn(move || {
@@ -579,15 +582,20 @@ impl ReaderApp {
         }
         let mut proposed = self.workspace.clone();
         proposed.settings = settings.clone();
-        self.store.save(&proposed)?;
-        self.workspace = proposed;
+        self.options.store.save(&proposed)?;
+        let previous = &self.workspace.settings;
         for view in std::iter::once(&mut self.view).chain(self.cached.values_mut()) {
-            view.max_records = settings.max_records;
-            view.seconds = settings.seconds;
-            if view.mode == Mode::Recent {
+            if view.max_records == previous.max_records {
+                view.max_records = settings.max_records;
+            }
+            if view.seconds == previous.seconds {
+                view.seconds = settings.seconds;
+            }
+            if view.mode == Mode::Recent && view.start_value == previous.recent_window.to_string() {
                 view.start_value = settings.recent_window.to_string();
             }
         }
+        self.workspace = proposed;
         self.enforce_budget();
         theme(ctx, &settings);
         self.notice = "App settings applied and saved".into();
@@ -1024,14 +1032,14 @@ impl ReaderApp {
             );
             if ui
                 .add_enabled(
-                    !self.exporting && !self.view.buffer.records.is_empty(),
+                    !self.exporting
+                        && self.export_editor.is_none()
+                        && !self.view.buffer.records.is_empty(),
                     egui::Button::new("Export"),
                 )
                 .clicked()
             {
-                self.export_editor = Some(ExportEditor {
-                    path: format!("{}-records.jsonl", tab.topic),
-                });
+                self.open_export(&tab.topic);
             }
         });
         ui.add_space(3.);

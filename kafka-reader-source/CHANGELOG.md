@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Isolated GUI smoke workspaces and broker integration fixtures from existing user data.
+- Required broker Metadata v4 to protect exact-topic lookups from automatic topic creation.
+- Preserved terminal read outcomes and skipped counts under backpressure, and
+  surfaced individual partition errors during timestamp seeks.
+- Bound exports to the originating view and made GUI export file creation exclusive.
+- Protected newer workspace saves and preserved per-tab read controls when changing appearance.
+- Rejected a new server draft before saving if its first tab exceeds the tab limit.
+- Applied the default SASL/PLAIN mechanism to the native client.
+- Corrected checkout instructions, source archive contents, and release checksum coverage.
+
 ## 0.3.0 — 22 November 2026
 
 - Renamed the displayed application to **Kafka Reader** and the portable

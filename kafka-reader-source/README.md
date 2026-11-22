@@ -38,14 +38,15 @@ when loaded. Real servers are identified by their saved connection type, not by
 their name, so a real connection named "Demo" is preserved. There is no demo
 launcher or public `--demo` mode.
 
-The original unsigned Windows release was cross-compiled on Linux and its PE
-imports were inspected. A later Windows GNU build passed the release tests,
-offline self-test, and a headless read through the Sondahub bridge on Windows
-x64. Desktop interaction on Windows remains unverified. See the
-[original release report](TEST-REPORT.md) and the
-[native Windows report](qa/results/v0.3.0/windows-native-2026-11-22.json)
-for the checks and hashes of the respective binaries. There is no installer, updater or OS
-keychain integration. No macOS or ARM binary is supplied.
+The original unsigned Windows release was cross-compiled on Linux. The Windows
+GNU build with the review fixes was exercised on Windows x64, including native
+desktop smoke and reopen, the disposable Kafka fixture and a Sondahub bridge
+read. Each report identifies the build it covers. See the
+[original release report](TEST-REPORT.md), the
+[earlier headless Windows results](qa/results/v0.3.0/windows-native-2026-11-22.json)
+and the [Windows review-build results](qa/results/v0.3.0/windows-review-fixes-2026-11-22.json).
+The distribution has no installer, updater or OS keychain integration. The
+available release targets are Windows x64 and Linux x64.
 
 ## Workspace and settings
 
@@ -156,6 +157,10 @@ The app enforces `enable.auto.commit=false`, legacy
 offset storage is selected with automatic storage disabled, so the legacy
 partition reader does not create local offset files. Imported group IDs,
 interceptor hooks, native plugin paths and Kerberos command hooks are ignored.
+
+The broker must support Metadata v4 (Apache Kafka 0.11 or newer). Kafka Reader
+refuses older Metadata versions because a topic lookup on those versions can
+create a mistyped topic on brokers with automatic topic creation enabled.
 
 The native adapter owns the topic handle and queue on one worker thread. It
 copies message bytes before releasing native messages, and stops partition
@@ -287,8 +292,10 @@ executable may need `Start-Process -Wait` when waiting for it is important.
 
 GUI QA hooks include `--gui-smoke --screenshot-dir OUTPUT --data-dir DATA` and
 `--gui-check-reopen OUTPUT --data-dir DATA` for a second-process restoration
-check. Only `--gui-smoke` creates a synthetic fixture in memory for automated
-verification; its sample profile is excluded from saved workspaces.
+check. With no explicit data directory, `--gui-smoke` creates a temporary
+workspace. To keep its output for the reopen check, supply a directory without
+an existing `workspace.json`. The smoke fixture's sample profile is excluded
+from the saved workspace.
 `--light`, `--compact`, `--screenshot FILE` and `--exit-after SECONDS` are also
 available. A screenshot requires an actual native desktop/OpenGL display; it
 does not start a reader. Use an isolated data directory for QA so test changes
