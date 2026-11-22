@@ -78,6 +78,12 @@ limits. **Apply settings** commits the changes. All tabs share the retention
 budget, initially 10,000 records / 64 MiB of raw payload. Lowering it trims older
 inactive tabs first.
 
+Kafka Reader starts in Russian on a Russian-language desktop and in English
+otherwise. To change it, open **App settings → Language**, select **Русский**,
+**English**, or **System default**, then click **Apply settings**. In Russian,
+the same controls are **Настройки приложения → Язык** and **Применить**.
+See [App settings in Russian](docs/screenshots/v0.3.0/windows-russian-settings.png).
+
 Profiles, topic names, Favorites, open tab identities and app settings restore on
 startup. Startup does not connect or read. Usernames/passwords/tokens/private-key
 content stay in memory, so enter them again after restarting. Certificate paths

@@ -1,4 +1,5 @@
-use kafka_reader_rust::model::{PREVIEW_BYTES, Record, hex, pretty_json, text};
+use kafka_reader_rust::language::Language;
+use kafka_reader_rust::model::{Mode, PREVIEW_BYTES, Record, hex_in, pretty_json_in, text_in};
 use std::cmp::Ordering;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -6,6 +7,30 @@ pub(super) enum SortColumn {
     Time,
     Partition,
     Offset,
+}
+
+impl SortColumn {
+    pub fn label_in(self, language: Language, utc: bool) -> &'static str {
+        match self {
+            Self::Time if utc => language.text("Time · UTC", "Время · UTC"),
+            Self::Time => language.text("Time · local", "Время · местное"),
+            Self::Partition => language.text("Partition", "Раздел"),
+            Self::Offset => language.text("Offset", "Смещение"),
+        }
+    }
+}
+
+pub(super) fn mode_label(language: Language, mode: Mode) -> &'static str {
+    language.text(
+        mode.label(),
+        match mode {
+            Mode::Earliest => "С начала",
+            Mode::Recent => "Последние смещения",
+            Mode::Offset => "Со смещения",
+            Mode::Timestamp => "По времени",
+            Mode::Latest => "Новые сообщения",
+        },
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,38 +99,55 @@ pub(super) enum PayloadFormat {
 }
 
 impl PayloadFormat {
-    pub fn label(self) -> &'static str {
+    pub fn name_in(self, language: Language) -> &'static str {
         match self {
-            Self::Auto => "Auto",
+            Self::Auto => language.text("Auto", "Авто"),
             Self::Json => "JSON",
-            Self::Text => "Text",
+            Self::Text => language.text("Text", "Текст"),
             Self::Hex => "Hex",
         }
     }
 }
 
-pub(super) fn format_payload(bytes: Option<&[u8]>, format: PayloadFormat, key: bool) -> String {
+pub(super) fn format_payload_in(
+    language: Language,
+    bytes: Option<&[u8]>,
+    format: PayloadFormat,
+    key: bool,
+) -> String {
     let Some(bytes) = bytes else {
         return if key {
-            "<null key — distinct from an empty byte array>".into()
+            language
+                .text(
+                    "<null key — distinct from an empty byte array>",
+                    "<null — ключ отсутствует>",
+                )
+                .into()
         } else {
-            "<null value — Kafka tombstone>".into()
+            language
+                .text(
+                    "<null value — Kafka tombstone>",
+                    "<null — маркер удаления Kafka>",
+                )
+                .into()
         };
     };
     if bytes.is_empty() {
-        return "<empty — 0 bytes>".into();
+        return language
+            .text("<empty — 0 bytes>", "<пусто — 0 байт>")
+            .into();
     }
     match format {
-        PayloadFormat::Hex => hex(Some(bytes)),
-        PayloadFormat::Text => text(Some(bytes)),
-        PayloadFormat::Json => pretty_json(Some(bytes)),
+        PayloadFormat::Hex => hex_in(language, Some(bytes)),
+        PayloadFormat::Text => text_in(language, Some(bytes)),
+        PayloadFormat::Json => pretty_json_in(language, Some(bytes)),
         PayloadFormat::Auto => {
             // Decode/format only the bounded preview. Large records remain
             // exportable byte-for-byte without expensive full JSON parsing.
             if bytes.len() <= PREVIEW_BYTES
                 && serde_json::from_slice::<serde_json::Value>(bytes).is_ok()
             {
-                return pretty_json(Some(bytes));
+                return pretty_json_in(language, Some(bytes));
             }
             let mut end = bytes.len().min(PREVIEW_BYTES);
             let mut decoded = std::str::from_utf8(&bytes[..end]);
@@ -123,11 +165,15 @@ pub(super) fn format_payload(bytes: Option<&[u8]>, format: PayloadFormat, key: b
                     .chars()
                     .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
             }) {
-                text(Some(bytes))
+                text_in(language, Some(bytes))
             } else {
                 format!(
-                    "<binary data · {} bytes>\nChoose Hex in the format menu to inspect the bytes.\nJSONL export preserves the complete record as Base64.",
-                    bytes.len()
+                    "<{} · {} {}>\n{}",
+                    language.text("binary data", "двоичные данные"),
+                    bytes.len(),
+                    language.text("bytes", "Б"),
+                    language.text("Choose Hex in the format menu to inspect the bytes.\nJSONL export preserves the complete record as Base64.",
+                        "Выберите Hex для просмотра байтов.\nПри экспорте в JSONL запись сохраняется целиком в Base64.")
                 )
             }
         }
@@ -137,6 +183,38 @@ pub(super) fn format_payload(bytes: Option<&[u8]>, format: PayloadFormat, key: b
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kafka_reader_rust::model::preview_in;
+
+    #[test]
+    fn russian_previews_translate_annotations_and_preserve_user_text() {
+        let ru = Language::Russian;
+        // These literal messages resemble placeholders and must be shown verbatim.
+        for value in ["(empty value)", "∅ null / tombstone", "Москва ✓"] {
+            let bytes = Some(value.as_bytes());
+            assert_eq!(preview_in(ru, bytes, 100), value);
+            assert_eq!(
+                format_payload_in(ru, bytes, PayloadFormat::Auto, false),
+                value
+            );
+            assert_eq!(
+                format_payload_in(ru, bytes, PayloadFormat::Text, true),
+                value
+            );
+        }
+        let bytes = Some(b"(empty value)".as_slice());
+        let invalid = format_payload_in(ru, bytes, PayloadFormat::Json, false);
+        assert!(invalid.starts_with("// Некорректный JSON."));
+        assert!(invalid.ends_with("(empty value)"));
+        assert_eq!(
+            format_payload_in(ru, None, PayloadFormat::Text, false),
+            "<null — маркер удаления Kafka>"
+        );
+        assert_eq!(
+            format_payload_in(ru, None, PayloadFormat::Text, true),
+            "<null — ключ отсутствует>"
+        );
+        assert_eq!(preview_in(ru, Some(&[]), 100), "(пусто)");
+    }
 
     fn record(partition: i32, offset: i64, timestamp: i64) -> Record {
         Record {
@@ -245,14 +323,20 @@ mod tests {
 
     #[test]
     fn auto_format_shows_json_or_text_without_a_second_hex_copy() {
-        let json = format_payload(
+        let json = format_payload_in(
+            Language::English,
             Some(br#"{"event":"created","n":2}"#),
             PayloadFormat::Auto,
             false,
         );
         assert!(json.contains("\n  \"event\": \"created\""));
         assert_eq!(
-            format_payload(Some(b"order-42"), PayloadFormat::Auto, true),
+            format_payload_in(
+                Language::English,
+                Some(b"order-42"),
+                PayloadFormat::Auto,
+                true
+            ),
             "order-42"
         );
         assert!(!json.contains("00000000"));
@@ -261,10 +345,14 @@ mod tests {
     #[test]
     fn binary_requires_explicit_hex_and_null_key_is_not_a_tombstone() {
         for bytes in [b"\xFF\x00".as_slice(), b"\x00\x01".as_slice()] {
-            let automatic = format_payload(Some(bytes), PayloadFormat::Auto, false);
+            let automatic =
+                format_payload_in(Language::English, Some(bytes), PayloadFormat::Auto, false);
             assert!(automatic.contains("Choose Hex"));
             assert!(!automatic.contains("00000000"));
-            assert!(format_payload(Some(bytes), PayloadFormat::Hex, false).contains("00000000"));
+            assert!(
+                format_payload_in(Language::English, Some(bytes), PayloadFormat::Hex, false)
+                    .contains("00000000")
+            );
         }
         for format in [
             PayloadFormat::Auto,
@@ -272,10 +360,15 @@ mod tests {
             PayloadFormat::Text,
             PayloadFormat::Hex,
         ] {
-            let key = format_payload(None, format, true);
+            let key = format_payload_in(Language::English, None, format, true);
             assert!(key.contains("null key") && !key.contains("tombstone"));
-            assert_ne!(key, format_payload(Some(&[]), format, true));
-            assert!(format_payload(None, format, false).contains("tombstone"));
+            assert_ne!(
+                key,
+                format_payload_in(Language::English, Some(&[]), format, true)
+            );
+            assert!(
+                format_payload_in(Language::English, None, format, false).contains("tombstone")
+            );
         }
     }
 }

@@ -6,11 +6,14 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 use dialogs::{ExportEditor, ServerEditor, SettingsEditor, TopicEditor};
 use eframe::egui::{self, Color32, RichText};
 use kafka_reader_rust::{
+    language::Language,
     model::*,
     reader::{Event, Session},
     workspace::*,
 };
-use presentation::{MessageOrder, PayloadFormat, SortColumn, format_payload, record_time};
+use presentation::{
+    MessageOrder, PayloadFormat, SortColumn, format_payload_in, mode_label, record_time,
+};
 use std::{
     collections::{BTreeMap, VecDeque},
     path::PathBuf,
@@ -32,7 +35,7 @@ pub struct Options {
 
 enum Job {
     Formatted(Tab, u64, String),
-    Exported(String),
+    Exported(PathBuf, usize, Result<(), String>),
 }
 
 struct TopicView {
@@ -40,6 +43,8 @@ struct TopicView {
     metadata: Vec<Partition>,
     selected: Option<Arc<Record>>,
     formatted: String,
+    pending_preview: bool,
+    language: Language,
     generation: u64,
     inspector_tab: usize,
     value_format: PayloadFormat,
@@ -69,6 +74,8 @@ impl TopicView {
             metadata: vec![],
             selected: None,
             formatted: String::new(),
+            pending_preview: false,
+            language: settings.language.resolve(),
             generation: 0,
             inspector_tab: 0,
             value_format: PayloadFormat::Auto,
@@ -98,7 +105,7 @@ impl TopicView {
             return false;
         }
         if !self.key_filter.is_empty()
-            && !preview(record.key.as_deref(), 256)
+            && !preview_in(self.language, record.key.as_deref(), 256)
                 .to_lowercase()
                 .contains(&self.key_filter.to_lowercase())
         {
@@ -110,8 +117,8 @@ impl TopicView {
                 record.topic,
                 record.partition,
                 record.offset,
-                preview(record.key.as_deref(), 180),
-                record.preview()
+                preview_in(self.language, record.key.as_deref(), 180),
+                preview_in(self.language, record.value.as_deref(), 180)
             )
             .to_lowercase()
             .contains(&self.filter.to_lowercase())
@@ -178,7 +185,18 @@ impl ReaderApp {
         let (jobs_tx, jobs_rx) = unbounded();
         let notice = persistence_error
             .as_ref()
-            .map(|e| format!("Workspace was not loaded: {e}. The original file is unchanged."))
+            .map(|e| {
+                let lang = workspace.settings.language.resolve();
+                let detail = lang.message(e);
+                match lang {
+                    Language::English => format!(
+                        "Workspace was not loaded: {detail}. The original file is unchanged."
+                    ),
+                    Language::Russian => format!(
+                        "Не удалось загрузить рабочую область: {detail}. Исходный файл сохранён."
+                    ),
+                }
+            })
             .unwrap_or_default();
         let mut app = Self {
             workspace,
@@ -217,6 +235,9 @@ impl ReaderApp {
         }
         app
     }
+    fn language(&self) -> Language {
+        self.workspace.settings.language.resolve()
+    }
     fn dark(&self) -> bool {
         self.workspace.settings.dark
     }
@@ -239,23 +260,42 @@ impl ReaderApp {
             || self.export_editor.is_some()
     }
     fn persist(&mut self) {
+        let lang = self.language();
         if self.persistence_error.is_some() {
-            self.notice = "Workspace storage is unavailable. Session changes are kept in memory; repair or move workspace.json to restore saving.".into();
+            self.notice = lang.text("Workspace storage is unavailable. Session changes are kept in memory; repair or move workspace.json to restore saving.", "Не удалось сохранить рабочую область. Изменения останутся в памяти. Чтобы снова их сохранять, исправьте или переместите workspace.json.").into();
         } else if let Err(e) = self.options.store.save(&self.workspace) {
-            self.notice = format!("Could not save workspace: {e}");
+            self.notice = format!(
+                "{}: {}",
+                lang.text(
+                    "Could not save workspace",
+                    "Не удалось сохранить рабочую область"
+                ),
+                lang.message(&e)
+            );
         }
     }
     fn activate(&mut self, tab: Tab) -> Result<(), String> {
+        let lang = self.language();
         let previous = self.active().cloned();
         if self.running() && previous.as_ref() != Some(&tab) {
-            return Err("Stop the active reader before switching topics or servers".into());
+            return Err(lang
+                .text(
+                    "Stop the active reader before switching topics or servers",
+                    "Остановите чтение перед сменой топика или сервера",
+                )
+                .into());
         }
         if previous.as_ref() == Some(&tab) {
-            self.workspace.open_tab(tab, self.running())?;
+            let running = self.running();
+            self.workspace
+                .open_tab(tab, running)
+                .map_err(|e| lang.message(&e))?;
             return Ok(());
         }
         self.drain_reader(usize::MAX);
-        self.workspace.open_tab(tab.clone(), false)?;
+        self.workspace
+            .open_tab(tab.clone(), false)
+            .map_err(|e| lang.message(&e))?;
         self.switch_view(previous, &tab);
         self.persist();
         Ok(())
@@ -278,7 +318,10 @@ impl ReaderApp {
     }
     fn close_tab(&mut self, tab: &Tab) -> Result<(), String> {
         let was_active = self.active() == Some(tab);
-        self.workspace.close_tab(tab, self.running())?;
+        let running = self.running();
+        self.workspace
+            .close_tab(tab, running)
+            .map_err(|e| self.language().message(&e))?;
         self.cached.remove(tab);
         self.cache_order.retain(|t| t != tab);
         if was_active {
@@ -343,17 +386,24 @@ impl ReaderApp {
             {
                 v.selected = None;
                 v.formatted.clear();
+                v.pending_preview = false;
                 // Zero is never issued to a preview job; invalidate an evicted selection.
                 v.generation = 0;
             }
         }
     }
     fn properties(&self) -> Result<Properties, String> {
-        let server = self.server().ok_or("Select a topic first")?;
+        let lang = self.language();
+        let server = self
+            .server()
+            .ok_or(lang.text("Select a topic first", "Сначала выберите топик"))?;
         Ok(session_properties(server, &self.credentials))
     }
     fn request(&self, inspect: bool) -> Result<Request, String> {
-        let active = self.active().ok_or("Open a topic tab first")?;
+        let lang = self.language();
+        let active = self
+            .active()
+            .ok_or(lang.text("Open a topic tab first", "Сначала откройте вкладку топика"))?;
         let partitions = if self.view.partition_text.trim().is_empty() {
             vec![]
         } else {
@@ -361,14 +411,23 @@ impl ReaderApp {
                 .partition_text
                 .split(',')
                 .map(|p| {
-                    p.trim()
-                        .parse::<i32>()
-                        .map_err(|_| "Use partition numbers separated by commas".to_string())
+                    p.trim().parse::<i32>().map_err(|_| {
+                        lang.text(
+                            "Use partition numbers separated by commas",
+                            "Введите номера разделов через запятую",
+                        )
+                        .to_string()
+                    })
                 })
                 .collect::<Result<Vec<_>, _>>()?
         };
         if partitions.iter().any(|p| *p < 0) {
-            return Err("Partition IDs cannot be negative".into());
+            return Err(lang
+                .text(
+                    "Partition IDs cannot be negative",
+                    "Номера разделов должны быть неотрицательными",
+                )
+                .into());
         }
         let value = if matches!(self.view.mode, Mode::Earliest | Mode::Latest) {
             0
@@ -381,16 +440,29 @@ impl ReaderApp {
                     chrono::DateTime::parse_from_rfc3339(self.view.start_value.trim())
                         .map(|t| t.timestamp_millis())
                 })
-                .map_err(|_| "Use epoch milliseconds or an ISO-8601 timestamp".to_string())?
+                .map_err(|_| {
+                    lang.text(
+                        "Use epoch milliseconds or an ISO-8601 timestamp",
+                        "Укажите время в миллисекундах Unix или в формате ISO 8601",
+                    )
+                    .to_string()
+                })?
         } else {
-            self.view
-                .start_value
-                .trim()
-                .parse()
-                .map_err(|_| "Use a whole offset or recent window".to_string())?
+            self.view.start_value.trim().parse().map_err(|_| {
+                lang.text(
+                    "Use a whole offset or recent window",
+                    "Введите целое число для смещения или размера окна",
+                )
+                .to_string()
+            })?
         };
         if value < 0 || (self.view.mode == Mode::Recent && value == 0) {
-            return Err("Use a nonnegative start or a positive recent window".into());
+            return Err(lang
+                .text(
+                    "Use a nonnegative start or a positive recent window",
+                    "Начальное смещение должно быть неотрицательным, а размер окна — больше нуля",
+                )
+                .into());
         }
         Ok(Request {
             props: self.properties()?,
@@ -415,6 +487,7 @@ impl ReaderApp {
                     self.view.buffer.clear();
                     self.view.selected = None;
                     self.view.formatted.clear();
+                    self.view.pending_preview = false;
                     self.next_preview_generation += 1;
                     self.view.generation = self.next_preview_generation;
                     self.view.fetched = 0;
@@ -487,9 +560,24 @@ impl ReaderApp {
                         text,
                     );
                 }
-                Job::Exported(message) => {
+                Job::Exported(path, count, result) => {
+                    let lang = self.language();
                     self.exporting = false;
-                    self.notice = message;
+                    self.notice = match result {
+                        Ok(()) => match lang {
+                            Language::English => {
+                                format!("Exported {count} records to {}", path.display())
+                            }
+                            Language::Russian => {
+                                format!("Экспортировано записей: {count} · {}", path.display())
+                            }
+                        },
+                        Err(e) => format!(
+                            "{}: {}",
+                            lang.text("Export failed", "Ошибка экспорта"),
+                            lang.message(&e)
+                        ),
+                    };
                 }
             }
         }
@@ -498,22 +586,42 @@ impl ReaderApp {
         let Some(key) = self.active().cloned() else {
             return;
         };
-        self.view.selected = Some(record.clone());
-        self.next_preview_generation += 1;
-        self.view.generation = self.next_preview_generation;
-        let generation = self.view.generation;
-        let tab = self.view.inspector_tab;
-        let format = if tab == 1 {
-            self.view.key_format
-        } else {
-            self.view.value_format
+        self.view.selected = Some(record);
+        Self::queue_preview(
+            key,
+            &mut self.view,
+            &mut self.next_preview_generation,
+            &self.jobs_tx,
+        );
+    }
+    fn queue_preview(
+        key: Tab,
+        view: &mut TopicView,
+        next_generation: &mut u64,
+        jobs: &Sender<Job>,
+    ) {
+        let Some(record) = view.selected.clone() else {
+            return;
         };
-        self.view.formatted = "Preparing preview…".into();
-        let tx = self.jobs_tx.clone();
+        let lang = view.language;
+        *next_generation += 1;
+        view.generation = *next_generation;
+        let generation = view.generation;
+        let tab = view.inspector_tab;
+        let format = if tab == 1 {
+            view.key_format
+        } else {
+            view.value_format
+        };
+        view.pending_preview = true;
+        view.formatted = lang
+            .text("Preparing preview…", "Подготовка просмотра…")
+            .into();
+        let tx = jobs.clone();
         thread::spawn(move || {
             let output = match tab {
-                0 => format_payload(record.value.as_deref(), format, false),
-                1 => format_payload(record.key.as_deref(), format, true),
+                0 => format_payload_in(lang, record.value.as_deref(), format, false),
+                1 => format_payload_in(lang, record.key.as_deref(), format, true),
                 2 => {
                     let mut result = String::new();
                     for (i, h) in record.headers.iter().take(500).enumerate() {
@@ -521,34 +629,66 @@ impl ReaderApp {
                             "{:03}  {}\n     {}\n\n",
                             i + 1,
                             h.name,
-                            preview(h.value.as_deref(), 400)
+                            preview_in(lang, h.value.as_deref(), 400)
                         ));
                     }
                     if record.headers.len() > 500 {
-                        result.push_str("[First 500 headers shown; export preserves all.]\n");
+                        result.push_str(lang.text(
+                            "[First 500 headers shown; export preserves all.]\n",
+                            "[Показаны первые 500 заголовков. При экспорте сохраняются все.]\n",
+                        ));
                     }
                     result
                 }
-                _ => format!(
-                    "Topic           {}\nPartition       {}\nOffset          {}\nTimestamp       {}\nTimestamp type  {}\nKey             {}\nValue           {}\nHeaders         {}\nRaw bytes       {}\n",
-                    record.topic,
-                    record.partition,
-                    record.offset,
-                    record.timestamp,
-                    record.timestamp_type,
-                    size_desc(&record.key),
-                    size_desc(&record.value),
-                    record.headers.len(),
-                    record.bytes()
-                ),
+                _ => {
+                    let mut result = String::new();
+                    for (label, value) in [
+                        (lang.text("Topic", "Топик"), record.topic.clone()),
+                        (
+                            lang.text("Partition", "Раздел"),
+                            record.partition.to_string(),
+                        ),
+                        (lang.text("Offset", "Смещение"), record.offset.to_string()),
+                        (
+                            lang.text("Timestamp", "Метка времени"),
+                            record.timestamp.to_string(),
+                        ),
+                        (
+                            lang.text("Timestamp type", "Тип метки"),
+                            record.timestamp_type.clone(),
+                        ),
+                        (lang.text("Key", "Ключ"), size_desc(lang, &record.key)),
+                        (
+                            lang.text("Value", "Значение"),
+                            size_desc(lang, &record.value),
+                        ),
+                        (
+                            lang.text("Headers", "Заголовки"),
+                            record.headers.len().to_string(),
+                        ),
+                        (
+                            lang.text("Raw bytes", "Всего байт"),
+                            record.bytes().to_string(),
+                        ),
+                    ] {
+                        result.push_str(&format!("{label:<16}{value}\n"));
+                    }
+                    result
+                }
             };
             let _ = tx.send(Job::Formatted(key, generation, output));
         });
     }
     fn open_export(&mut self, topic: &str) {
+        let lang = self.language();
         let records = self.view.visible();
         if records.is_empty() {
-            self.notice = "There are no visible retained records to export".into();
+            self.notice = lang
+                .text(
+                    "There are no visible retained records to export",
+                    "Нет видимых записей для экспорта",
+                )
+                .into();
             return;
         }
         self.export_editor = Some(ExportEditor {
@@ -565,26 +705,34 @@ impl ReaderApp {
         self.exporting = true;
         let tx = self.jobs_tx.clone();
         thread::spawn(move || {
-            let message = match export(&path, &records) {
-                Ok(()) => format!("Exported {} records to {}", records.len(), path.display()),
-                Err(e) => format!("Export failed: {e}"),
-            };
-            let _ = tx.send(Job::Exported(message));
+            let result = export(&path, &records);
+            let _ = tx.send(Job::Exported(path, records.len(), result));
         });
     }
     fn apply_settings(&mut self, settings: Settings, ctx: &egui::Context) -> Result<(), String> {
+        let lang = self.language();
         if self.running() {
-            return Err("Stop the active reader before applying app settings".into());
+            return Err(lang
+                .text(
+                    "Stop the active reader before applying app settings",
+                    "Чтобы применить настройки, остановите чтение",
+                )
+                .into());
         }
-        settings.validate()?;
+        settings.validate().map_err(|e| lang.message(&e))?;
         if self.persistence_error.is_some() {
-            return Err("Repair or move the invalid workspace file before saving settings".into());
+            return Err(lang.text("Repair or move the invalid workspace file before saving settings", "Перед сохранением настроек исправьте или переместите повреждённый файл рабочей области").into());
         }
         let mut proposed = self.workspace.clone();
         proposed.settings = settings.clone();
-        self.options.store.save(&proposed)?;
+        self.options
+            .store
+            .save(&proposed)
+            .map_err(|e| lang.message(&e))?;
         let previous = &self.workspace.settings;
+        let new_lang = settings.language.resolve();
         for view in std::iter::once(&mut self.view).chain(self.cached.values_mut()) {
+            view.language = new_lang;
             if view.max_records == previous.max_records {
                 view.max_records = settings.max_records;
             }
@@ -597,59 +745,91 @@ impl ReaderApp {
         }
         self.workspace = proposed;
         self.enforce_budget();
+        if lang != new_lang {
+            if let Some(tab) = self.active().cloned() {
+                Self::queue_preview(
+                    tab,
+                    &mut self.view,
+                    &mut self.next_preview_generation,
+                    &self.jobs_tx,
+                );
+            }
+            for (tab, view) in &mut self.cached {
+                Self::queue_preview(
+                    tab.clone(),
+                    view,
+                    &mut self.next_preview_generation,
+                    &self.jobs_tx,
+                );
+            }
+        }
         theme(ctx, &settings);
-        self.notice = "App settings applied and saved".into();
+        self.notice = new_lang
+            .text(
+                "App settings applied and saved",
+                "Настройки применены и сохранены",
+            )
+            .into();
         Ok(())
     }
     fn status(&self) -> &'static str {
+        let lang = self.language();
         match self.view.state.as_str() {
             "CONNECTING" => {
                 if self.offline() {
-                    "Preparing demo"
+                    lang.text("Preparing demo", "Подготовка демо")
                 } else {
-                    "Connecting"
+                    lang.text("Connecting", "Подключение")
                 }
             }
             "READING" => {
                 if self.offline() {
-                    "Demo running"
+                    lang.text("Demo running", "Демонстрация")
                 } else if self.view.follow {
-                    "Following"
+                    lang.text("Following", "Ожидание новых сообщений")
                 } else {
-                    "Reading snapshot"
+                    lang.text("Reading snapshot", "Чтение снимка")
                 }
             }
-            "PAUSED" => "Paused",
-            "STOPPING" => "Stopping",
-            "STOPPED" => "Stopped",
-            "FAILED" => "Read failed",
+            "PAUSED" => lang.text("Paused", "Приостановлено"),
+            "STOPPING" => lang.text("Stopping", "Остановка"),
+            "STOPPED" => lang.text("Stopped", "Остановлено"),
+            "FAILED" => lang.text("Read failed", "Ошибка чтения"),
             "COMPLETED" => {
                 if self.offline() {
-                    "Demo complete"
+                    lang.text("Demo complete", "Демо завершено")
                 } else {
-                    "Completed"
+                    lang.text("Completed", "Завершено")
                 }
             }
-            "CHECK SETTINGS" => "Check settings",
+            "CHECK SETTINGS" => lang.text("Check settings", "Проверьте настройки"),
             _ => {
                 if self.offline() {
-                    "Offline demo"
+                    lang.text("Offline demo", "Автономная демонстрация")
                 } else {
-                    "Not connected"
+                    lang.text("Not connected", "Нет подключения")
                 }
             }
         }
     }
     fn sidebar(&mut self, ui: &mut egui::Ui) {
+        let lang = self.language();
         let running = self.running();
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Servers").size(17.).strong());
+            ui.label(
+                RichText::new(lang.text("Servers", "Серверы"))
+                    .size(17.)
+                    .strong(),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .add_enabled(
                         !running,
-                        egui::Button::new(RichText::new("+ Add server").color(accent(self.dark())))
-                            .frame(false),
+                        egui::Button::new(
+                            RichText::new(lang.text("+ Add server", "+ Сервер"))
+                                .color(accent(self.dark())),
+                        )
+                        .frame(false),
                     )
                     .clicked()
                 {
@@ -660,7 +840,7 @@ impl ReaderApp {
         ui.add_space(7.);
         ui.add(
             egui::TextEdit::singleline(&mut self.topic_search)
-                .hint_text("Find a saved topic…")
+                .hint_text(lang.text("Find a saved topic…", "Найти сохранённый топик…"))
                 .desired_width(f32::INFINITY),
         );
         ui.add_space(10.);
@@ -671,16 +851,19 @@ impl ReaderApp {
                 if ui
                     .add_sized(
                         [ui.available_width(), 28.],
-                        egui::Button::new("App settings"),
+                        egui::Button::new(lang.text("App settings", "Настройки приложения")),
                     )
                     .clicked()
                 {
                     self.settings_editor = Some(SettingsEditor::new(&self.workspace.settings));
                 }
                 ui.label(
-                    RichText::new("Local workspace  ·  Read only")
-                        .small()
-                        .color(muted(self.dark())),
+                    RichText::new(lang.text(
+                        "Local workspace  ·  Read only",
+                        "Локально  ·  Только чтение",
+                    ))
+                    .small()
+                    .color(muted(self.dark())),
                 );
             });
         let servers = self.workspace.servers.clone();
@@ -694,19 +877,23 @@ impl ReaderApp {
                     .flat_map(|s| s.topics.iter().filter(|t| t.favorite).map(move |t| (s, t)))
                     .collect();
                 if !favorites.is_empty() {
-                    egui::CollapsingHeader::new(format!("Favorites ({})", favorites.len()))
-                        .default_open(true)
-                        .id_salt("favorites")
-                        .show(ui, |ui| {
-                            for (server, topic) in &favorites {
-                                if query.is_empty()
-                                    || topic.name.to_lowercase().contains(&query)
-                                    || server.name.to_lowercase().contains(&query)
-                                {
-                                    self.topic_row(ui, server, topic, true);
-                                }
+                    egui::CollapsingHeader::new(format!(
+                        "{} ({})",
+                        lang.text("Favorites", "Избранное"),
+                        favorites.len()
+                    ))
+                    .default_open(true)
+                    .id_salt("favorites")
+                    .show(ui, |ui| {
+                        for (server, topic) in &favorites {
+                            if query.is_empty()
+                                || topic.name.to_lowercase().contains(&query)
+                                || server.name.to_lowercase().contains(&query)
+                            {
+                                self.topic_row(ui, server, topic, true);
                             }
-                        });
+                        }
+                    });
                     ui.add_space(10.);
                 }
                 for server in &servers {
@@ -723,7 +910,7 @@ impl ReaderApp {
                         continue;
                     }
                     let title = if server.offline {
-                        format!("{}  ·  demo", server.name)
+                        format!("{}  ·  {}", server.name, lang.text("demo", "демо"))
                     } else {
                         server.name.clone()
                     };
@@ -734,14 +921,23 @@ impl ReaderApp {
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.label(
-                                    RichText::new(format!("{} saved topics", server.topics.len()))
-                                        .small()
-                                        .color(muted(self.dark())),
+                                    RichText::new(match lang {
+                                        Language::English => {
+                                            format!("{} saved topics", server.topics.len())
+                                        }
+                                        Language::Russian => {
+                                            format!("Топиков: {}", server.topics.len())
+                                        }
+                                    })
+                                    .small()
+                                    .color(muted(self.dark())),
                                 );
                                 if ui
                                     .add_enabled(
                                         !running && !server.offline,
-                                        egui::Button::new("+ Topic").small().frame(false),
+                                        egui::Button::new(lang.text("+ Topic", "+ Топик"))
+                                            .small()
+                                            .frame(false),
                                     )
                                     .clicked()
                                 {
@@ -754,7 +950,9 @@ impl ReaderApp {
                                 if ui
                                     .add_enabled(
                                         !running && !server.offline,
-                                        egui::Button::new("Edit").small().frame(false),
+                                        egui::Button::new(lang.text("Edit", "Изменить"))
+                                            .small()
+                                            .frame(false),
                                     )
                                     .clicked()
                                 {
@@ -765,7 +963,10 @@ impl ReaderApp {
                                 self.topic_row(ui, server, topic, false);
                             }
                             if server.topics.is_empty() {
-                                ui.small("Add an exact topic name to start.");
+                                ui.small(lang.text(
+                                    "Add an exact topic name to start.",
+                                    "Для начала добавьте точное имя топика.",
+                                ));
                             }
                         });
                     ui.add_space(7.);
@@ -815,7 +1016,7 @@ impl ReaderApp {
                         }
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if star(ui, topic.favorite, self.dark()).clicked() {
+                        if star(self.language(), ui, topic.favorite, self.dark()).clicked() {
                             self.toggle_favorite(server.id, &topic.name);
                         }
                     });
@@ -823,6 +1024,7 @@ impl ReaderApp {
             });
     }
     fn tabs(&mut self, ui: &mut egui::Ui) {
+        let lang = self.language();
         let tabs = self.workspace.tabs.clone();
         let mut activate = None;
         let mut close = None;
@@ -860,14 +1062,16 @@ impl ReaderApp {
                                         self.workspace
                                             .server(tab.server)
                                             .map(|s| s.name.as_str())
-                                            .unwrap_or("Server"),
+                                            .unwrap_or(lang.text("Server", "Сервер")),
                                     );
                                     if ui
                                         .add_enabled(
                                             !(selected && self.running()),
                                             egui::Button::new("×").small().frame(false),
                                         )
-                                        .on_hover_text("Close topic tab")
+                                        .on_hover_text(
+                                            lang.text("Close topic tab", "Закрыть вкладку топика"),
+                                        )
                                         .clicked()
                                     {
                                         close = Some(tab.clone());
@@ -892,9 +1096,12 @@ impl ReaderApp {
                                 .server(self.workspace.selected_server)
                                 .is_some_and(|s| !s.offline)
                             {
-                                "Add a topic to the selected server"
+                                lang.text(
+                                    "Add a topic to the selected server",
+                                    "Добавить топик на выбранный сервер",
+                                )
                             } else {
-                                "Add a server"
+                                lang.text("Add a server", "Добавить сервер")
                             },
                         )
                         .clicked()
@@ -924,6 +1131,7 @@ impl ReaderApp {
         }
     }
     fn controls(&mut self, ui: &mut egui::Ui) {
+        let lang = self.language();
         let Some(tab) = self.active().cloned() else {
             return;
         };
@@ -934,26 +1142,43 @@ impl ReaderApp {
             ui.label(RichText::new("/").color(muted(self.dark())));
             ui.label(RichText::new(&tab.topic).strong().size(17.));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add_enabled(running, egui::Button::new("Stop")).clicked() {
+                if ui
+                    .add_enabled(running, egui::Button::new(lang.text("Stop", "Стоп")))
+                    .clicked()
+                {
                     self.stop();
                 }
                 if running {
                     let paused = self.session.as_ref().is_some_and(Session::paused);
-                    if ui.button(if paused { "Resume" } else { "Pause" }).clicked() {
+                    if ui
+                        .button(if paused {
+                            lang.text("Resume", "Продолжить")
+                        } else {
+                            lang.text("Pause", "Пауза")
+                        })
+                        .clicked()
+                    {
                         if let Some(s) = &self.session {
                             s.toggle_pause();
                         }
                     }
                 } else if ui
                     .add(
-                        egui::Button::new(RichText::new("Read").strong().color(if self.dark() {
-                            Color32::from_rgb(30, 24, 15)
-                        } else {
-                            Color32::WHITE
-                        }))
+                        egui::Button::new(
+                            RichText::new(lang.text("Read", "Читать")).strong().color(
+                                if self.dark() {
+                                    Color32::from_rgb(30, 24, 15)
+                                } else {
+                                    Color32::WHITE
+                                },
+                            ),
+                        )
                         .fill(accent(self.dark())),
                     )
-                    .on_hover_text("Read this topic · Ctrl+Enter")
+                    .on_hover_text(lang.text(
+                        "Read this topic · Ctrl+Enter",
+                        "Читать этот топик · Ctrl+Enter",
+                    ))
                     .clicked()
                 {
                     self.start(false);
@@ -971,20 +1196,36 @@ impl ReaderApp {
         });
         ui.add_space(4.);
         ui.horizontal(|ui| {
-            for (n, label) in ["Messages", "Topic info", "Partitions"].iter().enumerate() {
+            for (n, label) in [
+                lang.text("Messages", "Сообщения"),
+                lang.text("Topic info", "О топике"),
+                lang.text("Partitions", "Разделы"),
+            ]
+            .iter()
+            .enumerate()
+            {
                 ui.selectable_value(&mut self.view.subview, n, *label);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .add_enabled(!running, egui::Button::new("Inspect topic").small())
+                    .add_enabled(
+                        !running,
+                        egui::Button::new(lang.text("Inspect topic", "Проверить топик")).small(),
+                    )
                     .clicked()
                 {
                     self.start(true);
                 }
                 let info = if self.view.metadata.is_empty() {
-                    "Metadata not inspected".to_string()
+                    lang.text("Metadata not inspected", "Метаданные не загружены")
+                        .to_string()
                 } else {
-                    format!("{} inspected partitions", self.view.metadata.len())
+                    match lang {
+                        Language::English => {
+                            format!("{} inspected partitions", self.view.metadata.len())
+                        }
+                        Language::Russian => format!("Разделов: {}", self.view.metadata.len()),
+                    }
                 };
                 ui.label(RichText::new(info).small().color(muted(self.dark())));
             });
@@ -1000,7 +1241,7 @@ impl ReaderApp {
             let search = ui.add(
                 egui::TextEdit::singleline(&mut self.view.filter)
                     .id_salt("loaded-message-search")
-                    .hint_text("Search loaded messages…")
+                    .hint_text(lang.text("Search loaded messages…", "Поиск в сообщениях…"))
                     .desired_width(width),
             );
             if self.focus_filter {
@@ -1010,24 +1251,28 @@ impl ReaderApp {
             let current = self
                 .view
                 .display_partition
-                .map(|p| format!("Partition {p}"))
-                .unwrap_or_else(|| "All partitions".into());
+                .map(|p| format!("{} {p}", lang.text("Partition", "Раздел")))
+                .unwrap_or_else(|| lang.text("All partitions", "Все разделы").into());
             egui::ComboBox::from_id_salt("display-partition")
                 .selected_text(current)
                 .width(120.)
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.view.display_partition, None, "All partitions");
+                    ui.selectable_value(
+                        &mut self.view.display_partition,
+                        None,
+                        lang.text("All partitions", "Все разделы"),
+                    );
                     for p in &self.view.metadata {
                         ui.selectable_value(
                             &mut self.view.display_partition,
                             Some(p.partition),
-                            format!("Partition {}", p.partition),
+                            format!("{} {}", lang.text("Partition", "Раздел"), p.partition),
                         );
                     }
                 });
             ui.add(
                 egui::TextEdit::singleline(&mut self.view.key_filter)
-                    .hint_text("Filter by key…")
+                    .hint_text(lang.text("Filter by key…", "По ключу…"))
                     .desired_width(130.),
             );
             if ui
@@ -1035,7 +1280,7 @@ impl ReaderApp {
                     !self.exporting
                         && self.export_editor.is_none()
                         && !self.view.buffer.records.is_empty(),
-                    egui::Button::new("Export"),
+                    egui::Button::new(lang.text("Export", "Экспорт")),
                 )
                 .clicked()
             {
@@ -1045,9 +1290,13 @@ impl ReaderApp {
         ui.add_space(3.);
         ui.add_enabled_ui(!running, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("Start").small().color(muted(self.dark())));
+                ui.label(
+                    RichText::new(lang.text("Start", "Начало"))
+                        .small()
+                        .color(muted(self.dark())),
+                );
                 egui::ComboBox::from_id_salt("read-mode")
-                    .selected_text(self.view.mode.label())
+                    .selected_text(mode_label(lang, self.view.mode))
                     .width(120.)
                     .show_ui(ui, |ui| {
                         for mode in [
@@ -1058,7 +1307,7 @@ impl ReaderApp {
                             Mode::Latest,
                         ] {
                             if ui
-                                .selectable_value(&mut self.view.mode, mode, mode.label())
+                                .selectable_value(&mut self.view.mode, mode, mode_label(lang, mode))
                                 .changed()
                             {
                                 self.view.start_value = if mode == Mode::Timestamp {
@@ -1083,16 +1332,20 @@ impl ReaderApp {
                     );
                 }
                 ui.label(
-                    RichText::new("Read partitions")
+                    RichText::new(lang.text("Read partitions", "Разделы"))
                         .small()
                         .color(muted(self.dark())),
                 );
                 ui.add(
                     egui::TextEdit::singleline(&mut self.view.partition_text)
-                        .hint_text("All / 0,1")
+                        .hint_text(lang.text("All / 0,1", "Все / 0,1"))
                         .desired_width(65.),
                 );
-                ui.label(RichText::new("Max").small().color(muted(self.dark())));
+                ui.label(
+                    RichText::new(lang.text("Max", "Макс."))
+                        .small()
+                        .color(muted(self.dark())),
+                );
                 ui.add(
                     egui::DragValue::new(&mut self.view.max_records)
                         .range(1..=1_000_000)
@@ -1101,22 +1354,23 @@ impl ReaderApp {
                 ui.add(
                     egui::DragValue::new(&mut self.view.seconds)
                         .range(1..=86_400)
-                        .suffix(" s"),
+                        .suffix(lang.text(" s", " с")),
                 );
-                ui.checkbox(&mut self.view.follow, "Follow");
+                ui.checkbox(&mut self.view.follow, lang.text("Follow", "Следить"));
             });
         });
         ui.add_space(5.);
     }
     fn messages(&mut self, ui: &mut egui::Ui) {
+        let lang = self.language();
         if self.view.buffer.records.is_empty() {
             ui.vertical_centered(|ui| {
                 ui.add_space((ui.available_height() * 0.22).max(15.));
-                ui.label(RichText::new(if self.running() { "Waiting for messages" } else { "This topic is ready to explore" }).size(20.).strong());
+                ui.label(RichText::new(if self.running() { lang.text("Waiting for messages", "Ожидание сообщений") } else { lang.text("This topic is ready to explore", "Топик готов к чтению") }).size(20.).strong());
                 ui.add_space(6.);
-                ui.label(if self.offline() { "Read a synthetic stream. No Kafka connection is made." } else { "Choose a start position, then Read. Your saved profile is not connected automatically." });
+                ui.label(if self.offline() { lang.text("Read a synthetic stream. No Kafka connection is made.", "Читайте тестовые сообщения без подключения к Kafka.") } else { lang.text("Choose a start position, then Read. Your saved profile is not connected automatically.", "Выберите начальную позицию и нажмите «Читать». Подключение по сохранённому профилю запускается вручную.") });
                 ui.add_space(12.);
-                if ui.add_enabled(!self.running(), egui::Button::new(if self.offline() { "Read offline demo" } else { "Read topic" })).clicked() { self.start(false); }
+                if ui.add_enabled(!self.running(), egui::Button::new(if self.offline() { lang.text("Read offline demo", "Читать демо") } else { lang.text("Read topic", "Читать топик") })).clicked() { self.start(false); }
             });
             return;
         }
@@ -1146,28 +1400,28 @@ impl ReaderApp {
                         egui::Layout::left_to_right(egui::Align::Center),
                         |ui| {
                             ui.set_width(first_width);
-                            ui.label(RichText::new("Event / key").small().strong());
+                            ui.label(RichText::new(lang.text("Event / key", "Событие / ключ")).small().strong());
                         },
                     );
-                    for (column, label, width, hint) in [
-                        (SortColumn::Partition, "Partition", partition_width,
-                            "Sort by partition number. Offsets stay ascending within each partition."),
-                        (SortColumn::Offset, "Offset", offset_width,
-                            "Sort by numeric offset. Offsets belong to individual partitions; they are not a topic-wide sequence."),
-                        (SortColumn::Time, if self.workspace.settings.utc { "Time · UTC" } else { "Time · local" }, time_width,
-                            "Sort by the complete message timestamp. Messages without timestamps stay at the end."),
+                    for (column, width, hint) in [
+                        (SortColumn::Partition, partition_width,
+                            lang.text("Sort by partition number. Offsets stay ascending within each partition.", "Сортировать по номеру раздела. Внутри раздела смещения идут по возрастанию.")),
+                        (SortColumn::Offset, offset_width,
+                            lang.text("Sort by numeric offset. Offsets belong to individual partitions; they are not a topic-wide sequence.", "Сортировать по числовому смещению. У каждого раздела своя последовательность смещений.")),
+                        (SortColumn::Time, time_width,
+                            lang.text("Sort by the complete message timestamp. Messages without timestamps stay at the end.", "Сортировать по полной метке времени. Сообщения без метки остаются в конце.")),
                     ] {
                         let active = self.view.order.column == column;
-                        let caption = RichText::new(label)
+                        let caption = RichText::new(column.label_in(lang, self.workspace.settings.utc))
                             .small()
                             .strong()
                             .color(if active { accent(dark) } else { muted(dark) });
-                        let direction = if self.view.order.descending { "descending" } else { "ascending" };
+                        let direction = if self.view.order.descending { lang.text("descending", "по убыванию") } else { lang.text("ascending", "по возрастанию") };
                         let response = ui.add_sized([width, 26.], egui::Button::new(caption).frame(false))
                             .on_hover_text(if active {
-                                format!("{hint}\nCurrent order: {direction}. Click to reverse.")
+                                format!("{hint}\n{}: {direction}. {}", lang.text("Current order", "Порядок"), lang.text("Click to reverse.", "Нажмите, чтобы изменить порядок."))
                             } else {
-                                format!("{hint}\nClick to sort this column.")
+                                format!("{hint}\n{}", lang.text("Click to sort this column.", "Нажмите для сортировки по этому столбцу."))
                             });
                         if active {
                             let center = egui::pos2(response.rect.right() - 7., response.rect.center().y);
@@ -1228,13 +1482,15 @@ impl ReaderApp {
                                         ui.horizontal(|ui| {
                                             ui.add(
                                                 egui::Label::new(
-                                                    RichText::new(event_label(record)).strong(),
+                                                    RichText::new(event_label(lang, record))
+                                                        .strong(),
                                                 )
                                                 .truncate(),
                                             );
                                             ui.add(
                                                 egui::Label::new(
-                                                    RichText::new(preview(
+                                                    RichText::new(preview_in(
+                                                        lang,
                                                         record.key.as_deref(),
                                                         30,
                                                     ))
@@ -1246,9 +1502,13 @@ impl ReaderApp {
                                         if !self.workspace.settings.compact_rows {
                                             ui.add(
                                                 egui::Label::new(
-                                                    RichText::new(record.preview())
-                                                        .small()
-                                                        .color(muted(dark)),
+                                                    RichText::new(preview_in(
+                                                        lang,
+                                                        record.value.as_deref(),
+                                                        180,
+                                                    ))
+                                                    .small()
+                                                    .color(muted(dark)),
                                                 )
                                                 .truncate(),
                                             );
@@ -1300,7 +1560,13 @@ impl ReaderApp {
                                                 )
                                             }
                                         })
-                                        .unwrap_or_else(|| "Timestamp unavailable".into()),
+                                        .unwrap_or_else(|| {
+                                            lang.text(
+                                                "Timestamp unavailable",
+                                                "Метка времени отсутствует",
+                                            )
+                                            .into()
+                                        }),
                                 );
                             });
                         });
@@ -1325,8 +1591,17 @@ impl ReaderApp {
             });
     }
     fn inspector(&mut self, ui: &mut egui::Ui) {
+        let lang = self.language();
         ui.horizontal(|ui| {
-            for (n, label) in ["Value", "Key", "Headers", "Metadata"].iter().enumerate() {
+            for (n, label) in [
+                lang.text("Value", "Значение"),
+                lang.text("Key", "Ключ"),
+                lang.text("Headers", "Заголовки"),
+                lang.text("Metadata", "Метаданные"),
+            ]
+            .iter()
+            .enumerate()
+            {
                 if ui
                     .selectable_value(&mut self.view.inspector_tab, n, *label)
                     .changed()
@@ -1340,31 +1615,48 @@ impl ReaderApp {
                 if ui
                     .add_enabled(
                         self.view.selected.is_some(),
-                        egui::Button::new("Copy record").small(),
+                        egui::Button::new(lang.text("Copy record", "Копировать запись")).small(),
                     )
-                    .on_hover_text("Copy the complete record as JSON, including raw Base64 bytes.")
+                    .on_hover_text(lang.text(
+                        "Copy the complete record as JSON, including raw Base64 bytes.",
+                        "Скопировать запись целиком в JSON, включая исходные байты в Base64.",
+                    ))
                     .clicked()
                 {
                     if let Some(r) = &self.view.selected {
                         if r.bytes() > 4 * 1024 * 1024 {
-                            self.notice =
-                                "Clipboard limit is 4 MiB; export this record instead".into();
+                            self.notice = lang
+                                .text(
+                                    "Clipboard limit is 4 MiB; export this record instead",
+                                    "Лимит буфера обмена — 4 МиБ. Сохраните запись через экспорт.",
+                                )
+                                .into();
                         } else {
                             ui.ctx().copy_text(r.json().to_string());
-                            self.notice = "Copied the full record as JSON".into();
+                            self.notice = lang
+                                .text(
+                                    "Copied the full record as JSON",
+                                    "Запись скопирована в формате JSON",
+                                )
+                                .into();
                         }
                     }
                 }
                 if ui
                     .add_enabled(
-                        self.view.selected.is_some() && self.view.formatted != "Preparing preview…",
-                        egui::Button::new("Copy view").small(),
+                        self.view.selected.is_some() && !self.view.pending_preview,
+                        egui::Button::new(lang.text("Copy view", "Копировать текст")).small(),
                     )
-                    .on_hover_text("Copy the displayed preview in the selected format.")
+                    .on_hover_text(lang.text(
+                        "Copy the displayed preview in the selected format.",
+                        "Скопировать отображаемый текст в выбранном формате.",
+                    ))
                     .clicked()
                 {
                     ui.ctx().copy_text(self.view.formatted.clone());
-                    self.notice = "Copied the displayed preview".into();
+                    self.notice = lang
+                        .text("Copied the displayed preview", "Текст скопирован")
+                        .into();
                 }
                 if self.view.inspector_tab <= 1 {
                     let format = if self.view.inspector_tab == 1 {
@@ -1375,7 +1667,7 @@ impl ReaderApp {
                     let previous = *format;
                     egui::ComboBox::from_id_salt("payload-format")
                         .width(78.)
-                        .selected_text(format.label())
+                        .selected_text(format.name_in(lang))
                         .show_ui(ui, |ui| {
                             for choice in [
                                 PayloadFormat::Auto,
@@ -1383,7 +1675,7 @@ impl ReaderApp {
                                 PayloadFormat::Text,
                                 PayloadFormat::Hex,
                             ] {
-                                ui.selectable_value(format, choice, choice.label());
+                                ui.selectable_value(format, choice, choice.name_in(lang));
                             }
                         });
                     if previous != *format {
@@ -1397,21 +1689,48 @@ impl ReaderApp {
         ui.separator();
         if let Some(r) = &self.view.selected {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(format!("Key  {}", preview(r.key.as_deref(), 40))).small());
-                ui.label(RichText::new(format!("Partition  {}", r.partition)).small());
-                ui.label(RichText::new(format!("Offset  {}", r.offset)).small());
                 ui.label(
                     RichText::new(format!(
-                        "{}  ·  {} headers",
-                        human_bytes(r.bytes()),
-                        r.headers.len()
+                        "{}  {}",
+                        lang.text("Key", "Ключ"),
+                        preview_in(lang, r.key.as_deref(), 40)
                     ))
+                    .small(),
+                );
+                ui.label(
+                    RichText::new(format!(
+                        "{}  {}",
+                        lang.text("Partition", "Раздел"),
+                        r.partition
+                    ))
+                    .small(),
+                );
+                ui.label(
+                    RichText::new(format!("{}  {}", lang.text("Offset", "Смещение"), r.offset))
+                        .small(),
+                );
+                ui.label(
+                    RichText::new(match lang {
+                        Language::English => format!(
+                            "{}  ·  {} headers",
+                            human_bytes(lang, r.bytes()),
+                            r.headers.len()
+                        ),
+                        Language::Russian => format!(
+                            "{}  ·  заголовков: {}",
+                            human_bytes(lang, r.bytes()),
+                            r.headers.len()
+                        ),
+                    })
                     .small()
                     .color(muted(self.dark())),
                 );
             });
         } else {
-            ui.small("Select a message to inspect its bytes, key and ordered headers.");
+            ui.small(lang.text(
+                "Select a message to inspect its bytes, key and ordered headers.",
+                "Выберите сообщение, чтобы увидеть его байты, ключ и заголовки.",
+            ));
         }
         ui.add_space(5.);
         egui::Frame::new()
@@ -1479,39 +1798,52 @@ impl ReaderApp {
             });
     }
     fn information(&mut self, ui: &mut egui::Ui) {
+        let lang = self.language();
         if self.view.subview == 1 {
             let Some(active) = self.active() else {
                 return;
             };
             ui.add_space(12.);
-            ui.label(RichText::new("Topic information").size(18.).strong());
+            ui.label(
+                RichText::new(lang.text("Topic information", "Сведения о топике"))
+                    .size(18.)
+                    .strong(),
+            );
             ui.add_space(12.);
             egui::Grid::new("topic-information")
                 .num_columns(2)
                 .spacing([28., 14.])
                 .show(ui, |ui| {
                     for (label, value) in [
-                        ("Topic", active.topic.clone()),
+                        (lang.text("Topic", "Топик"), active.topic.clone()),
                         (
-                            "Server",
+                            lang.text("Server", "Сервер"),
                             self.server().map(|s| s.name.clone()).unwrap_or_default(),
                         ),
                         (
-                            "Source",
+                            lang.text("Source", "Источник"),
                             if self.offline() {
-                                "Offline synthetic stream".into()
+                                lang.text("Offline synthetic stream", "Автономный тестовый поток")
+                                    .into()
                             } else {
-                                "Kafka · explicit topic access".into()
+                                lang.text(
+                                    "Kafka · explicit topic access",
+                                    "Kafka · доступ по имени топика",
+                                )
+                                .into()
                             },
                         ),
-                        ("Session", self.status().to_string()),
+                        (lang.text("Session", "Сеанс"), self.status().to_string()),
                         (
-                            "Retained records",
+                            lang.text("Retained records", "Записей в памяти"),
                             self.view.buffer.records.len().to_string(),
                         ),
-                        ("Retained raw data", human_bytes(self.view.buffer.bytes)),
                         (
-                            "Isolation",
+                            lang.text("Retained raw data", "Данных в памяти"),
+                            human_bytes(lang, self.view.buffer.bytes),
+                        ),
+                        (
+                            lang.text("Isolation", "Изоляция"),
                             self.properties()
                                 .ok()
                                 .and_then(|p| p.get("isolation.level").cloned())
@@ -1524,28 +1856,35 @@ impl ReaderApp {
                     }
                 });
             ui.add_space(20.);
-            ui.label("Topic names are registered locally. Inspect topic queries only this exact topic and never lists the cluster.");
+            ui.label(lang.text("Topic names are registered locally. Inspect topic queries only this exact topic and never lists the cluster.", "Имена топиков хранятся локально. Кнопка «Проверить топик» запрашивает сведения только о выбранном топике."));
             ui.add_space(8.);
-            ui.label("Finite reads capture exclusive partition ends. Read-committed ends respect the last stable offset, including open transactions.");
+            ui.label(lang.text("Finite reads capture exclusive partition ends. Read-committed ends respect the last stable offset, including open transactions.", "При чтении снимка верхняя граница каждого раздела не включается в диапазон. В режиме read_committed она соответствует последнему стабильному смещению с учётом открытых транзакций."));
         } else {
             ui.add_space(12.);
             ui.label(
-                RichText::new("Inspected partition bounds")
+                RichText::new(lang.text("Inspected partition bounds", "Границы разделов"))
                     .size(18.)
                     .strong(),
             );
             ui.add_space(8.);
-            ui.label("Ends are exclusive. An offset range is not a message count; compacted and transactional topics can contain gaps.");
+            ui.label(lang.text("Ends are exclusive. An offset range is not a message count; compacted and transactional topics can contain gaps.", "Конечное смещение не входит в диапазон. После уплотнения топика или при использовании транзакций в смещениях бывают пропуски, поэтому размер диапазона может отличаться от числа сообщений."));
             ui.add_space(16.);
             if self.view.metadata.is_empty() {
-                ui.label("Choose Inspect topic to load partition metadata.");
+                ui.label(lang.text(
+                    "Choose Inspect topic to load partition metadata.",
+                    "Нажмите «Проверить топик», чтобы загрузить метаданные разделов.",
+                ));
             } else {
                 egui::Grid::new("partition-bounds")
                     .striped(true)
                     .spacing([55., 14.])
                     .show(ui, |ui| {
-                        for title in ["Partition", "Beginning", "Readable end", "Offset positions"]
-                        {
+                        for title in [
+                            lang.text("Partition", "Раздел"),
+                            lang.text("Beginning", "Начало"),
+                            lang.text("Readable end", "Граница чтения"),
+                            lang.text("Offset positions", "Размер диапазона"),
+                        ] {
                             ui.strong(title);
                         }
                         ui.end_row();
@@ -1595,6 +1934,7 @@ impl ReaderApp {
 
 impl eframe::App for ReaderApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let lang = self.language();
         self.drain();
         let ctx = ui.ctx().clone();
         self.shortcuts(&ctx);
@@ -1631,7 +1971,11 @@ impl eframe::App for ReaderApp {
                             .color(muted(self.dark())),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new("READ ONLY").small().color(muted(self.dark())));
+                        ui.label(
+                            RichText::new(lang.text("READ ONLY", "ТОЛЬКО ЧТЕНИЕ"))
+                                .small()
+                                .color(muted(self.dark())),
+                        );
                     });
                 });
             });
@@ -1657,19 +2001,25 @@ impl eframe::App for ReaderApp {
                     let text = if !self.notice.is_empty() {
                         self.notice.clone()
                     } else {
-                        format!(
-                            "{} records loaded · {} fetched · {} evicted · {} skipped",
-                            self.view.buffer.records.len(),
-                            self.view.fetched,
-                            self.view.buffer.evicted,
-                            self.view.skipped
-                        )
+                        let loaded = self.view.buffer.records.len();
+                        let fetched = self.view.fetched;
+                        let evicted = self.view.buffer.evicted;
+                        let skipped = self.view.skipped;
+                        match lang {
+                            Language::English => format!("{loaded} records loaded · {fetched} fetched · {evicted} evicted · {skipped} skipped"),
+                            Language::Russian => format!("В памяти: {loaded} · Получено: {fetched} · Вытеснено: {evicted} · Пропущено: {skipped}"),
+                        }
                     };
                     ui.add(egui::Label::new(RichText::new(text).small()).truncate())
                         .on_hover_text(if self.notice.is_empty() {
-                            &self.view.detail
+                            match self.view.detail.as_str() {
+                                "Choose Read to start this topic." => lang.text("Choose Read to start this topic.", "Нажмите «Читать», чтобы открыть топик для чтения.").into(),
+                                "Opening the offline topic" => lang.text("Opening the offline topic", "Открываем автономный топик").into(),
+                                "Connecting to the selected topic" => lang.text("Connecting to the selected topic", "Подключаемся к выбранному топику").into(),
+                                detail => lang.message(detail),
+                            }
                         } else {
-                            &self.notice
+                            self.notice.clone()
                         });
                 });
             });
@@ -1708,14 +2058,14 @@ impl eframe::App for ReaderApp {
                         if self.active().is_none() {
                             ui.vertical_centered(|ui| {
                                 ui.add_space(100.);
-                                ui.heading("Open a topic from your workspace");
+                                ui.heading(lang.text("Open a topic from your workspace", "Откройте топик в рабочей области"));
                                 ui.label(
-                                    "Add a server and register an exact topic to start reading.",
+                                    lang.text("Add a server and register an exact topic to start reading.", "Добавьте сервер и укажите точное имя топика, чтобы начать чтение."),
                                 );
                                 ui.add_space(12.);
                                 if ui
                                     .button(
-                                        RichText::new("+ Add server").color(accent(self.dark())),
+                                        RichText::new(lang.text("+ Add server", "+ Сервер")).color(accent(self.dark())),
                                     )
                                     .clicked()
                                 {
@@ -1801,7 +2151,7 @@ fn status_dot(ui: &mut egui::Ui, label: &str, color: Color32) {
     ui.painter().circle_filled(rect.center(), 3.5, color);
     ui.label(RichText::new(label).small());
 }
-fn star(ui: &mut egui::Ui, selected: bool, dark: bool) -> egui::Response {
+fn star(lang: Language, ui: &mut egui::Ui, selected: bool, dark: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(19., 19.), egui::Sense::click());
     let points: Vec<_> = (0..=10)
         .map(|i| {
@@ -1818,25 +2168,29 @@ fn star(ui: &mut egui::Ui, selected: bool, dark: bool) -> egui::Response {
         ),
     ));
     response.on_hover_text(if selected {
-        "Remove favorite"
+        lang.text("Remove favorite", "Убрать из избранного")
     } else {
-        "Add favorite"
+        lang.text("Add favorite", "В избранное")
     })
 }
-fn human_bytes(n: usize) -> String {
+fn human_bytes(lang: Language, n: usize) -> String {
     if n < 1024 {
-        format!("{n} B")
+        format!("{n} {}", lang.text("B", "Б"))
     } else if n < 1024 * 1024 {
-        format!("{:.1} KiB", n as f64 / 1024.)
+        format!("{:.1} {}", n as f64 / 1024., lang.text("KiB", "КиБ"))
     } else {
-        format!("{:.1} MiB", n as f64 / (1024. * 1024.))
+        format!(
+            "{:.1} {}",
+            n as f64 / (1024. * 1024.),
+            lang.text("MiB", "МиБ")
+        )
     }
 }
-fn size_desc(v: &Option<Vec<u8>>) -> String {
+fn size_desc(lang: Language, v: &Option<Vec<u8>>) -> String {
     match v {
         None => "null".into(),
-        Some(v) if v.is_empty() => "empty (0 bytes)".into(),
-        Some(v) => format!("{} bytes", v.len()),
+        Some(v) if v.is_empty() => lang.text("empty (0 bytes)", "пусто (0 байт)").into(),
+        Some(v) => format!("{} {}", v.len(), lang.text("bytes", "Б")),
     }
 }
 fn timestamp(ms: i64, utc: bool) -> String {
@@ -1852,12 +2206,12 @@ fn timestamp(ms: i64, utc: bool) -> String {
         })
         .unwrap_or_else(|| "—".into())
 }
-fn event_label(record: &Record) -> String {
+fn event_label(lang: Language, record: &Record) -> String {
     let Some(value) = &record.value else {
-        return "Tombstone".into();
+        return lang.text("Tombstone", "Метка удаления").into();
     };
     if value.is_empty() {
-        return "Empty value".into();
+        return lang.text("Empty value", "Пустое значение").into();
     }
     if value.len() <= 4096 {
         if let Ok(json) = serde_json::from_slice::<serde_json::Value>(value) {
@@ -1866,13 +2220,13 @@ fn event_label(record: &Record) -> String {
                     return s.chars().take(64).collect();
                 }
             }
-            return "JSON message".into();
+            return lang.text("JSON message", "JSON-сообщение").into();
         }
     }
     if std::str::from_utf8(value).is_ok() {
-        "Text message".into()
+        lang.text("Text message", "Текстовое сообщение").into()
     } else {
-        "Binary message".into()
+        lang.text("Binary message", "Двоичное сообщение").into()
     }
 }
 fn highlight_json(text: &str, dark: bool, size: f32) -> egui::text::LayoutJob {
@@ -2018,6 +2372,7 @@ fn deliver_preview(
     if let Some(target) = target {
         if generation == target.generation {
             target.formatted = text;
+            target.pending_preview = false;
         }
     }
 }

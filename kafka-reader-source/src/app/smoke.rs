@@ -1,6 +1,7 @@
 //! Deterministic UI exercise hooks. They use the same application actions as the UI.
 //! Checkpoints let an independent X11 observer verify actual top-level windows.
 use super::*;
+use kafka_reader_rust::language::{Language, LanguagePreference};
 use std::fs;
 const SECRET: &str = "KAFKA_UI_QA_SECRET_2026";
 
@@ -111,13 +112,18 @@ impl ReaderApp {
                 assert_eq!(self.workspace.settings.retained_records, 120);
                 assert_eq!(self.workspace.settings.max_records, 333);
                 assert_eq!(self.workspace.settings.seconds, 45);
+                assert_eq!(
+                    self.workspace.settings.language,
+                    LanguagePreference::Russian
+                );
+                assert_eq!(self.language(), Language::Russian);
                 assert_eq!(self.workspace.tabs.len(), 2);
                 assert!(self.workspace.tabs.iter().all(|t| t.server == server.id));
                 assert!(self.active().is_some_and(|t| t.server == server.id));
-                self.smoke.checks = 15;
+                self.smoke.checks = 17;
                 self.smoke.done = true;
                 self.phase("reopened", "main", "Kafka Reader");
-                let report = serde_json::json!({"guiReopen":"PASS","checks":15,"sessionStarted":false,"credentialsRestored":false,"recordsRestored":0,"offlineServersRestored":0,"realServersRestored":1,"appVersion":env!("CARGO_PKG_VERSION")});
+                let report = serde_json::json!({"guiReopen":"PASS","checks":self.smoke.checks,"language":self.workspace.settings.language,"sessionStarted":false,"credentialsRestored":false,"recordsRestored":0,"offlineServersRestored":0,"realServersRestored":1,"appVersion":env!("CARGO_PKG_VERSION")});
                 let directory = self.options.reopen.as_ref().unwrap();
                 atomic_write(
                     &directory.join("gui-reopen-report.json"),
@@ -285,9 +291,7 @@ impl ReaderApp {
                 self.select(record);
                 self.step(40);
             }
-            40 if elapsed > Duration::from_millis(150)
-                && self.view.formatted != "Preparing preview…" =>
-            {
+            40 if elapsed > Duration::from_millis(150) && !self.view.pending_preview => {
                 let selected = self.view.selected.as_ref().unwrap();
                 let expected = std::str::from_utf8(selected.key.as_deref().unwrap()).unwrap();
                 assert_eq!(self.view.formatted, expected);
@@ -301,9 +305,7 @@ impl ReaderApp {
                 self.select(self.view.selected.clone().unwrap());
                 self.step(42);
             }
-            42 if elapsed > Duration::from_millis(150)
-                && self.view.formatted != "Preparing preview…" =>
-            {
+            42 if elapsed > Duration::from_millis(150) && !self.view.pending_preview => {
                 assert!(self.view.formatted.starts_with("00000000"));
                 assert!(self.view.formatted.contains("41 47 52 2D"));
                 self.smoke.checks += 1;
@@ -316,9 +318,7 @@ impl ReaderApp {
                 self.select(self.view.selected.clone().unwrap());
                 self.step(44);
             }
-            44 if elapsed > Duration::from_millis(150)
-                && self.view.formatted != "Preparing preview…" =>
-            {
+            44 if elapsed > Duration::from_millis(150) && !self.view.pending_preview => {
                 assert!(self.view.formatted.starts_with('{'));
                 assert!(self.view.formatted.contains("\n"));
                 assert_eq!(self.view.key_format, PayloadFormat::Hex);
@@ -342,22 +342,38 @@ impl ReaderApp {
                 editor.certificate = "C:/certs/client.pem".into();
                 editor.key = "C:/certs/client-key.pem".into();
                 editor.advanced = "isolation.level=read_committed\nclient.id=kafka-reader".into();
-                self.phase("connection", "server", "Add server · Kafka Reader");
+                self.phase(
+                    "connection",
+                    "server",
+                    dialogs::server_title(true, self.language()),
+                );
                 self.step(6);
             }
             6 if elapsed > Duration::from_millis(1200) => {
                 self.server_editor.as_mut().unwrap().tab = 1;
-                self.phase("authentication", "server", "Add server · Kafka Reader");
+                self.phase(
+                    "authentication",
+                    "server",
+                    dialogs::server_title(true, self.language()),
+                );
                 self.step(7);
             }
             7 if elapsed > Duration::from_millis(1200) => {
                 self.server_editor.as_mut().unwrap().tab = 2;
-                self.phase("tls", "server", "Add server · Kafka Reader");
+                self.phase(
+                    "tls",
+                    "server",
+                    dialogs::server_title(true, self.language()),
+                );
                 self.step(8);
             }
             8 if elapsed > Duration::from_millis(1200) => {
                 self.server_editor.as_mut().unwrap().tab = 3;
-                self.phase("advanced", "server", "Add server · Kafka Reader");
+                self.phase(
+                    "advanced",
+                    "server",
+                    dialogs::server_title(true, self.language()),
+                );
                 self.step(9);
             }
             9 if elapsed > Duration::from_millis(1200) => {
@@ -365,7 +381,7 @@ impl ReaderApp {
                 editor.advanced.push_str(&format!(
                     "\ncustom.token={SECRET}\nssl.key.pem=PRIVATE KEY {SECRET}"
                 ));
-                let (built, secrets) = editor.build().unwrap();
+                let (built, secrets) = editor.build(self.language()).unwrap();
                 assert_eq!(built.properties["ssl.ca.location"], "C:/certs/ca.pem");
                 assert_eq!(secrets["sasl.password"], SECRET);
                 self.smoke.checks += 1;
@@ -419,6 +435,8 @@ impl ReaderApp {
                 assert!(!self.credentials.contains_key(&1));
                 self.smoke.checks += 1;
                 let original = self.workspace.settings.clone();
+                assert_eq!(original.language, LanguagePreference::System);
+                self.smoke.checks += 1;
                 self.settings_editor = Some(SettingsEditor::new(&original));
                 self.settings_editor.as_mut().unwrap().value.dark = !original.dark;
                 self.settings_editor = None;
@@ -426,6 +444,7 @@ impl ReaderApp {
                 self.smoke.checks += 1;
                 let mut editor = SettingsEditor::new(&original);
                 editor.value.dark = false;
+                editor.value.language = LanguagePreference::Russian;
                 editor.value.font_size = 13.;
                 editor.value.max_records = 333;
                 editor.value.seconds = 45;
@@ -439,7 +458,11 @@ impl ReaderApp {
                     topic: "agreement.events".into(),
                 })
                 .unwrap();
-                self.phase("settings", "settings", "App settings · Kafka Reader");
+                self.phase(
+                    "settings",
+                    "settings",
+                    dialogs::settings_title(self.language()),
+                );
                 self.step(10);
             }
             10 if elapsed > Duration::from_millis(1200) => {
@@ -447,6 +470,8 @@ impl ReaderApp {
                 self.apply_settings(settings, ctx).unwrap();
                 assert_eq!(self.view.max_records, 333);
                 assert_eq!(self.view.seconds, 45);
+                assert_eq!(self.language(), Language::Russian);
+                self.smoke.checks += 1;
                 self.smoke.checks += 1;
                 let retained = self.view.buffer.records.len()
                     + self
@@ -456,6 +481,16 @@ impl ReaderApp {
                         .sum::<usize>();
                 assert!(retained <= 120);
                 self.smoke.checks += 1;
+                self.settings_editor = Some(SettingsEditor::new(&self.workspace.settings));
+                self.phase(
+                    "settings-ru",
+                    "settings",
+                    dialogs::settings_title(self.language()),
+                );
+                self.step(14);
+            }
+            14 if elapsed > Duration::from_millis(1200) => {
+                self.settings_editor = None;
                 self.phase("light", "main", "Kafka Reader");
                 self.step(11);
             }

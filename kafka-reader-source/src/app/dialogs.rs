@@ -1,4 +1,5 @@
 use super::*;
+use kafka_reader_rust::language::{Language, LanguagePreference};
 use std::fs;
 use std::io::Write;
 
@@ -70,7 +71,7 @@ impl ServerEditor {
             is_new,
         }
     }
-    pub(super) fn build(&self) -> Result<(Server, Properties), String> {
+    pub(super) fn build(&self, lang: Language) -> Result<(Server, Properties), String> {
         let mut p = parse_properties(&self.advanced)?;
         p.insert("bootstrap.servers".into(), self.brokers.trim().into());
         p.insert("security.protocol".into(), self.protocol.clone());
@@ -97,23 +98,33 @@ impl ServerEditor {
         server.name = self.name.trim().into();
         server.properties = p;
         if server.name.is_empty() || server.name.len() > 100 {
-            return Err("Use a server name containing 1–100 characters".into());
+            return Err(lang
+                .text(
+                    "Use a server name containing 1–100 characters",
+                    "Введите имя сервера длиной от 1 до 100 символов",
+                )
+                .into());
         }
         if !server.offline && self.brokers.trim().is_empty() {
-            return Err("Enter at least one bootstrap broker as host:port".into());
+            return Err(lang
+                .text(
+                    "Enter at least one bootstrap broker as host:port",
+                    "Укажите хотя бы один начальный брокер в формате хост:порт",
+                )
+                .into());
         }
         if !self.test_topic.trim().is_empty() {
             server.register_topic(self.test_topic.trim())?;
         }
         Ok((server, secrets))
     }
-    fn test(&mut self) {
+    fn test(&mut self, lang: Language) {
         if self.test.as_ref().is_some_and(Session::running) {
             return;
         }
-        let request = (|| {
+        let request: Result<Request, String> = (|| {
             validate_topic(self.test_topic.trim())?;
-            let (server, credentials) = self.build()?;
+            let (server, credentials) = self.build(lang)?;
             let mut props = server.properties;
             props.extend(credentials);
             Ok(Request {
@@ -132,33 +143,44 @@ impl ServerEditor {
         match request {
             Ok(request) => {
                 self.test = Some(Session::start(request));
-                self.message = "Checking this exact topic…".into();
+                self.message = lang
+                    .text("Checking this exact topic…", "Проверяем доступ к топику…")
+                    .into();
             }
-            Err(e) => self.message = e,
+            Err(e) => self.message = lang.message(&e),
         }
     }
-    fn drain_test(&mut self) {
+    fn drain_test(&mut self, lang: Language) {
         if let Some(test) = &self.test {
             while let Some(event) = test.try_next() {
                 match event {
                     Event::Metadata(p) => {
-                        self.message = format!("Topic access verified · {} partitions", p.len())
+                        self.message = match lang {
+                            Language::English => {
+                                format!("Topic access verified · {} partitions", p.len())
+                            }
+                            Language::Russian => {
+                                format!("Доступ к топику подтверждён · разделов: {}", p.len())
+                            }
+                        }
                     }
                     Event::State(state, detail)
                         if matches!(state.as_str(), "FAILED" | "STOPPED") =>
                     {
-                        self.message = detail
+                        self.message = lang.message(&detail)
                     }
                     _ => {}
                 }
             }
         }
     }
-    fn import(&mut self) {
+    fn import(&mut self, lang: Language) {
         let result: Result<ServerEditor, String> = (|| {
             let path = PathBuf::from(&self.file_path);
             if fs::metadata(&path).map_err(|e| e.to_string())?.len() > 1024 * 1024 {
-                return Err("Profile exceeds 1 MiB".into());
+                return Err(lang
+                    .text("Profile exceeds 1 MiB", "Размер профиля превышает 1 МиБ")
+                    .into());
             }
             let mut props =
                 parse_properties(&fs::read_to_string(path).map_err(|e| e.to_string())?)?;
@@ -171,18 +193,28 @@ impl ServerEditor {
             let mut loaded = Self::new(server, Properties::new(), self.is_new, topic);
             loaded.file_path = self.file_path.clone();
             loaded.tab = 3;
-            loaded.message =
-                "Profile imported into this draft. Save applies it; Cancel discards it.".into();
+            loaded.message = lang
+                .text(
+                    "Profile imported into this draft. Save applies it; Cancel discards it.",
+                    "Профиль загружен в черновик. Сохраните его, чтобы применить изменения.",
+                )
+                .into();
             Ok(loaded)
         })();
         match result {
             Ok(loaded) => *self = loaded,
-            Err(e) => self.message = format!("Import failed: {e}"),
+            Err(e) => {
+                self.message = format!(
+                    "{}: {}",
+                    lang.text("Import failed", "Ошибка импорта"),
+                    lang.message(&e)
+                )
+            }
         }
     }
-    fn export(&mut self) {
+    fn export(&mut self, lang: Language) {
         let result = (|| {
-            let (server, _) = self.build()?;
+            let (server, _) = self.build(lang)?;
             let mut properties = server.properties;
             properties.insert("reader.topic".into(), self.test_topic.clone());
             let path = PathBuf::from(&self.file_path);
@@ -191,8 +223,17 @@ impl ServerEditor {
                 .map_err(|e| e.to_string())
         })();
         self.message = match result {
-            Ok(()) => "Exported this profile without session credentials".into(),
-            Err(e) => format!("Export failed: {e}"),
+            Ok(()) => lang
+                .text(
+                    "Exported this profile without session credentials",
+                    "Профиль экспортирован без учётных данных сеанса",
+                )
+                .into(),
+            Err(e) => format!(
+                "{}: {}",
+                lang.text("Export failed", "Ошибка экспорта"),
+                lang.message(&e)
+            ),
         };
     }
 }
@@ -224,10 +265,37 @@ enum Action {
     Cancel,
 }
 
+pub(super) fn server_title(is_new: bool, lang: Language) -> &'static str {
+    if is_new {
+        lang.text(
+            "Add server · Kafka Reader",
+            "Добавить сервер · Kafka Reader",
+        )
+    } else {
+        lang.text(
+            "Edit server · Kafka Reader",
+            "Изменить сервер · Kafka Reader",
+        )
+    }
+}
+
+pub(super) fn settings_title(lang: Language) -> &'static str {
+    lang.text(
+        "App settings · Kafka Reader",
+        "Настройки приложения · Kafka Reader",
+    )
+}
+
 impl ReaderApp {
     pub(super) fn open_server(&mut self, id: Option<u64>) {
         if self.running() {
-            self.notice = "Stop reading before changing server configuration".into();
+            self.notice = self
+                .language()
+                .text(
+                    "Stop reading before changing server configuration",
+                    "Остановите чтение перед изменением настроек сервера",
+                )
+                .into();
             return;
         }
         let server = id
@@ -257,17 +325,23 @@ impl ReaderApp {
         self.server_editor = Some(ServerEditor::new(server, credentials, id.is_none(), topic));
     }
     pub(super) fn save_server(&mut self, editor: &ServerEditor) -> Result<(), String> {
+        let lang = self.language();
         if self.running() {
-            return Err("Stop reading before saving server changes".into());
+            return Err(lang
+                .text(
+                    "Stop reading before saving server changes",
+                    "Остановите чтение перед сохранением настроек сервера",
+                )
+                .into());
         }
-        let (mut server, credentials) = editor.build()?;
+        let (mut server, credentials) = editor.build(lang)?;
         let mut proposed = self.workspace.clone();
         if editor.is_new {
             proposed.servers.push(server.clone());
         } else {
             let old = proposed
                 .server_mut(server.id)
-                .ok_or("Server is unavailable")?;
+                .ok_or(lang.text("Server is unavailable", "Сервер недоступен"))?;
             // The parent window can register or star topics while this draft is open.
             server.topics.clone_from(&old.topics);
             if !editor.test_topic.trim().is_empty() {
@@ -290,7 +364,7 @@ impl ReaderApp {
         proposed.validate()?;
         // Save the sanitized model before committing the draft into the live workspace.
         if self.persistence_error.is_some() {
-            return Err("Repair or move the invalid workspace file before saving a server".into());
+            return Err(lang.text("Repair or move the invalid workspace file before saving a server", "Чтобы сохранить сервер, исправьте или переместите повреждённый файл рабочего пространства").into());
         }
         self.options.store.save(&proposed)?;
         let previous = self.active().cloned();
@@ -307,84 +381,83 @@ impl ReaderApp {
             self.view = TopicView::new(&self.workspace.settings);
             self.session = None;
         }
-        self.notice =
-            "Server saved. Credentials stay in this session; no connection was started.".into();
+        self.notice = lang.text(
+            "Server saved. Credentials stay in this session; no connection was started.",
+            "Сервер сохранён. Учётные данные доступны только в этом сеансе. Подключение начнётся по вашей команде.",
+        ).into();
         Ok(())
     }
     pub(super) fn native_dialogs(&mut self, ctx: &egui::Context) {
+        let lang = self.language();
         if let Some(mut editor) = self.server_editor.take() {
-            editor.drain_test();
-            let title = if editor.is_new {
-                "Add server · Kafka Reader"
-            } else {
-                "Edit server · Kafka Reader"
-            };
+            editor.drain_test(lang);
+            let title = server_title(editor.is_new, lang);
             let action = ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("server-editor"),
                 egui::ViewportBuilder::default().with_title(title).with_inner_size([730., 650.]).with_min_inner_size([650., 580.]).with_position([160., 100.]), |ui, class| {
                     self.smoke.native_window_seen |= class == egui::ViewportClass::Immediate;
                     let mut action = if ui.input(|i| i.viewport().close_requested()) { Action::Cancel } else { Action::None };
                     egui::CentralPanel::default().frame(egui::Frame::new().fill(panel(self.dark())).inner_margin(22)).show(ui, |ui| {
-                        ui.label(RichText::new(if editor.is_new { "Add a server" } else { "Edit server" }).size(21.).strong());
-                        ui.label(RichText::new("Keep connection details together. Read only when you choose a topic.").color(muted(self.dark())));
+                        ui.label(RichText::new(if editor.is_new { lang.text("Add a server", "Добавить сервер") } else { lang.text("Edit server", "Изменить сервер") }).size(21.).strong());
+                        ui.label(RichText::new(lang.text("Keep connection details together. Read only when you choose a topic.", "Настройте подключение. Для чтения выберите топик.")).color(muted(self.dark())));
                         ui.add_space(16.);
-                        ui.horizontal(|ui| { for (n,label) in ["Connection", "Authentication", "TLS", "Advanced"].iter().enumerate() { ui.selectable_value(&mut editor.tab,n,*label); } });
+                        ui.horizontal(|ui| { for (n,label) in [lang.text("Connection", "Подключение"), lang.text("Authentication", "Аутентификация"), "TLS", lang.text("Advanced", "Дополнительно")].iter().enumerate() { ui.selectable_value(&mut editor.tab,n,*label); } });
                         ui.separator(); ui.add_space(12.);
                         egui::Panel::bottom("server-editor-actions").exact_size(90.).frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(0, 8))).show(ui, |ui| {
                             ui.add(egui::Label::new(RichText::new(&editor.message).small()).wrap());
                             ui.add_space(8.);
                             ui.horizontal(|ui| {
-                                if ui.add_enabled(!editor.test.as_ref().is_some_and(Session::running), egui::Button::new("Test exact topic")).clicked() { editor.test(); }
+                                if ui.add_enabled(!editor.test.as_ref().is_some_and(Session::running), egui::Button::new(lang.text("Test exact topic", "Проверить топик"))).clicked() { editor.test(lang); }
                                 if editor.test.as_ref().is_some_and(Session::running) { ui.spinner(); }
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.add(egui::Button::new(RichText::new("Save server").strong()).fill(selection(self.dark()))).clicked() { action = Action::Save; }
-                                    if ui.button("Cancel").clicked() { action = Action::Cancel; }
+                                    if ui.add(egui::Button::new(RichText::new(lang.text("Save server", "Сохранить сервер")).strong()).fill(selection(self.dark()))).clicked() { action = Action::Save; }
+                                    if ui.button(lang.text("Cancel", "Отмена")).clicked() { action = Action::Cancel; }
                                 });
                             });
                         });
                         egui::ScrollArea::vertical().id_salt("server-editor-content").show(ui, |ui| {
                             match editor.tab {
                                 0 => {
-                                    field(ui, "Server name", &mut editor.name, "Development", false);
-                                    field(ui, "Bootstrap servers", &mut editor.brokers, "broker-1:9092,broker-2:9092", false);
-                                    ui.label("Security protocol");
+                                    field(ui, lang.text("Server name", "Имя сервера"), &mut editor.name, lang.text("Development", "Среда разработки"), false);
+                                    field(ui, lang.text("Bootstrap servers", "Начальные брокеры"), &mut editor.brokers, "broker-1:9092,broker-2:9092", false);
+                                    ui.label(lang.text("Security protocol", "Протокол безопасности"));
                                     egui::ComboBox::from_id_salt("protocol").selected_text(&editor.protocol).width(260.).show_ui(ui, |ui| {
                                         for protocol in ["PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"] { ui.selectable_value(&mut editor.protocol, protocol.into(), protocol); }
                                     }); ui.add_space(14.);
-                                    field(ui, "Exact topic to test / register", &mut editor.test_topic, "orders.events", false);
-                                    ui.label(RichText::new("Testing queries this exact topic asynchronously. Saving a server does not connect or read messages.").small().color(muted(self.dark())));
+                                    field(ui, lang.text("Exact topic to test / register", "Точное имя топика для проверки или добавления"), &mut editor.test_topic, "orders.events", false);
+                                    ui.label(RichText::new(lang.text("Testing queries this exact topic asynchronously. Saving a server does not connect or read messages.", "Проверка обращается только к указанному топику в фоновом режиме. При сохранении сервера подключение не открывается.")).small().color(muted(self.dark())));
                                     ui.add_space(12.);
-                                    ui.label(RichText::new("Add more topic names from the server tree after saving.").small().color(muted(self.dark())));
+                                    ui.label(RichText::new(lang.text("Add more topic names from the server tree after saving.", "После сохранения можно добавить ещё топики в дереве серверов.")).small().color(muted(self.dark())));
                                 }
                                 1 => {
-                                    ui.label(RichText::new("Session credentials").strong());
-                                    ui.label(RichText::new("Usernames, passwords and tokens stay in memory and are not saved with your workspace.").small().color(muted(self.dark())));
+                                    ui.label(RichText::new(lang.text("Session credentials", "Учётные данные сеанса")).strong());
+                                    ui.label(RichText::new(lang.text("Usernames, passwords and tokens stay in memory and are not saved with your workspace.", "Имена пользователей, пароли и токены хранятся только в памяти до конца сеанса.")).small().color(muted(self.dark())));
                                     ui.add_space(15.);
-                                    ui.label("SASL mechanism");
+                                    ui.label(lang.text("SASL mechanism", "Механизм SASL"));
                                     egui::ComboBox::from_id_salt("sasl-mechanism").selected_text(&editor.mechanism).width(260.).show_ui(ui, |ui| {
                                         for mechanism in ["PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"] { ui.selectable_value(&mut editor.mechanism, mechanism.into(), mechanism); }
                                     }); ui.add_space(13.);
-                                    field(ui, "Username", &mut editor.username, "Kafka principal", false);
-                                    field(ui, "Password", &mut editor.password, "Session only", true);
-                                    if !editor.protocol.starts_with("SASL") { ui.label(RichText::new("Choose SASL_SSL or SASL_PLAINTEXT on Connection to use these credentials.").color(accent(self.dark()))); }
-                                    ui.add_space(10.); ui.small("The native client uses sasl.username / sasl.password. Java JAAS is not used.");
+                                    field(ui, lang.text("Username", "Имя пользователя"), &mut editor.username, lang.text("Kafka principal", "Пользователь Kafka"), false);
+                                    field(ui, lang.text("Password", "Пароль"), &mut editor.password, lang.text("Session only", "Только для этого сеанса"), true);
+                                    if !editor.protocol.starts_with("SASL") { ui.label(RichText::new(lang.text("Choose SASL_SSL or SASL_PLAINTEXT on Connection to use these credentials.", "Чтобы использовать эти данные, выберите SASL_SSL или SASL_PLAINTEXT на вкладке «Подключение».")).color(accent(self.dark()))); }
+                                    ui.add_space(10.); ui.small(lang.text("The native client uses sasl.username / sasl.password. Java JAAS is not used.", "Клиент использует параметры sasl.username и sasl.password. Настройки Java JAAS не поддерживаются."));
                                 }
                                 2 => {
-                                    ui.label(RichText::new("TLS certificates").strong()); ui.small("Certificate and hostname verification are enabled by default."); ui.add_space(12.);
-                                    field(ui, "CA certificate · PEM path", &mut editor.ca, "C:/certs/ca.pem", false);
-                                    field(ui, "Client certificate · optional PEM path", &mut editor.certificate, "C:/certs/client.pem", false);
-                                    field(ui, "Client private key · optional PEM path", &mut editor.key, "C:/certs/client-key.pem", false);
-                                    field(ui, "Private-key password · session only", &mut editor.key_password, "Only for an encrypted private key", true);
-                                    ui.small("Paths can be saved. Inline private keys and key passwords are omitted from workspace/profile exports.");
+                                    ui.label(RichText::new(lang.text("TLS certificates", "Сертификаты TLS")).strong()); ui.small(lang.text("Certificate and hostname verification are enabled by default.", "Проверка сертификата и имени хоста включена по умолчанию.")); ui.add_space(12.);
+                                    field(ui, lang.text("CA certificate · PEM path", "Сертификат центра сертификации · путь к файлу PEM"), &mut editor.ca, "C:/certs/ca.pem", false);
+                                    field(ui, lang.text("Client certificate · optional PEM path", "Сертификат клиента · путь к файлу PEM (необязательно)"), &mut editor.certificate, "C:/certs/client.pem", false);
+                                    field(ui, lang.text("Client private key · optional PEM path", "Закрытый ключ клиента · путь к файлу PEM (необязательно)"), &mut editor.key, "C:/certs/client-key.pem", false);
+                                    field(ui, lang.text("Private-key password · session only", "Пароль закрытого ключа · только для этого сеанса"), &mut editor.key_password, lang.text("Only for an encrypted private key", "Для зашифрованного закрытого ключа"), true);
+                                    ui.small(lang.text("Paths can be saved. Inline private keys and key passwords are omitted from workspace/profile exports.", "Пути к файлам сохраняются. Содержимое закрытых ключей и пароли остаются только в памяти."));
                                 }
                                 _ => {
-                                    ui.label("Additional librdkafka properties");
+                                    ui.label(lang.text("Additional librdkafka properties", "Дополнительные параметры librdkafka"));
                                     ui.add(egui::TextEdit::multiline(&mut editor.advanced).code_editor().desired_width(f32::INFINITY).desired_rows(7).hint_text("isolation.level=read_committed"));
-                                    ui.small("Literal UTF-8 key=value, one property per line. Read-only safety overrides remain enforced.");
+                                    ui.small(lang.text("Literal UTF-8 key=value, one property per line. Read-only safety overrides remain enforced.", "Формат UTF-8: ключ=значение, по одному параметру в строке. Приложение сохраняет режим только для чтения."));
                                     ui.add_space(14.); ui.separator(); ui.add_space(8.);
-                                    ui.label(RichText::new("Import / export connection profile").strong());
+                                    ui.label(RichText::new(lang.text("Import / export connection profile", "Импорт и экспорт профиля подключения")).strong());
                                     ui.add(egui::TextEdit::singleline(&mut editor.file_path).desired_width(f32::INFINITY).hint_text("server.properties"));
-                                    ui.horizontal(|ui| { if ui.button("Import into draft").clicked() { editor.import(); } if ui.button("Export safe profile").clicked() { editor.export(); } });
-                                    ui.small("Imports change this draft only. Export omits session credentials. Existing export files are not overwritten.");
+                                    ui.horizontal(|ui| { if ui.button(lang.text("Import into draft", "Импорт в черновик")).clicked() { editor.import(lang); } if ui.button(lang.text("Export safe profile", "Экспорт без учётных данных")).clicked() { editor.export(lang); } });
+                                    ui.small(lang.text("Imports change this draft only. Export omits session credentials. Existing export files are not overwritten.", "Импорт изменяет только черновик. Для экспорта выберите новый файл. Учётные данные сеанса в него не попадут."));
                                 }
                             }
                         });
@@ -396,7 +469,7 @@ impl ReaderApp {
                 Action::Save => match self.save_server(&editor) {
                     Ok(()) => {}
                     Err(e) => {
-                        editor.message = e;
+                        editor.message = lang.message(&e);
                         self.server_editor = Some(editor);
                     }
                 },
@@ -406,43 +479,50 @@ impl ReaderApp {
         }
         if let Some(mut editor) = self.settings_editor.take() {
             let action = ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("app-settings"),
-                egui::ViewportBuilder::default().with_title("App settings · Kafka Reader").with_inner_size([670., 700.]).with_min_inner_size([610., 640.]).with_position([190., 90.]), |ui,class| {
+                egui::ViewportBuilder::default().with_title(settings_title(lang)).with_inner_size([670., 700.]).with_min_inner_size([610., 640.]).with_position([190., 90.]), |ui,class| {
                     self.smoke.native_window_seen |= class == egui::ViewportClass::Immediate;
                     let mut action = if ui.input(|i|i.viewport().close_requested()) { Action::Cancel } else { Action::None };
                     egui::CentralPanel::default().frame(egui::Frame::new().fill(panel(self.dark())).inner_margin(22)).show(ui, |ui| {
-                        ui.label(RichText::new("App settings").size(21.).strong());
-                        ui.label(RichText::new("Appearance, reading defaults and local memory limits.").color(muted(self.dark()))); ui.add_space(16.);
+                        ui.label(RichText::new(lang.text("App settings", "Настройки приложения")).size(21.).strong());
+                        ui.label(RichText::new(lang.text("Appearance, reading defaults and local memory limits.", "Оформление, параметры чтения по умолчанию и ограничения памяти.")).color(muted(self.dark()))); ui.add_space(16.);
                         egui::Panel::bottom("settings-actions").exact_size(68.).frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(0, 8))).show(ui, |ui| {
                             ui.label(RichText::new(&editor.error).small());
                             ui.horizontal(|ui| {
-                                if self.running() { ui.small("Stop reading before applying changes."); }
+                                if self.running() { ui.small(lang.text("Stop reading before applying changes.", "Остановите чтение, чтобы применить изменения.")); }
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.add_enabled(!self.running(), egui::Button::new(RichText::new("Apply settings").strong()).fill(selection(self.dark()))).clicked() { action = Action::Save; }
-                                    if ui.button("Cancel").clicked() { action = Action::Cancel; }
+                                    if ui.add_enabled(!self.running(), egui::Button::new(RichText::new(lang.text("Apply settings", "Применить")).strong()).fill(selection(self.dark()))).clicked() { action = Action::Save; }
+                                    if ui.button(lang.text("Cancel", "Отмена")).clicked() { action = Action::Cancel; }
                                 });
                             });
                         });
                         egui::ScrollArea::vertical().show(ui, |ui| {
-                            section(ui, "Appearance", self.dark());
+                            section(ui, lang.text("Appearance", "Оформление"), self.dark());
                             egui::Grid::new("settings-appearance").num_columns(2).spacing([28., 12.]).show(ui, |ui| {
-                                ui.label("Theme"); ui.horizontal(|ui| { ui.selectable_value(&mut editor.value.dark,true,"Dark"); ui.selectable_value(&mut editor.value.dark,false,"Light"); }); ui.end_row();
-                                ui.label("Message rows"); ui.checkbox(&mut editor.value.compact_rows,"Compact"); ui.end_row();
-                                ui.label("Font size"); ui.add(egui::DragValue::new(&mut editor.value.font_size).range(11.0..=20.0).speed(0.5).suffix(" pt")); ui.end_row();
-                                ui.label("Display timestamps"); ui.horizontal(|ui| { ui.selectable_value(&mut editor.value.utc,true,"UTC"); ui.selectable_value(&mut editor.value.utc,false,"Local time"); }); ui.end_row();
+                                ui.label(lang.text("Language", "Язык"));
+                                ui.horizontal(|ui| {
+                                    ui.selectable_value(&mut editor.value.language, LanguagePreference::System, lang.text("System default", "Как в системе"));
+                                    ui.selectable_value(&mut editor.value.language, LanguagePreference::English, "English");
+                                    ui.selectable_value(&mut editor.value.language, LanguagePreference::Russian, "Русский");
+                                });
+                                ui.end_row();
+                                ui.label(lang.text("Theme", "Тема")); ui.horizontal(|ui| { ui.selectable_value(&mut editor.value.dark,true,lang.text("Dark", "Тёмная")); ui.selectable_value(&mut editor.value.dark,false,lang.text("Light", "Светлая")); }); ui.end_row();
+                                ui.label(lang.text("Message rows", "Строки сообщений")); ui.checkbox(&mut editor.value.compact_rows,lang.text("Compact", "Компактные")); ui.end_row();
+                                ui.label(lang.text("Font size", "Размер шрифта")); ui.add(egui::DragValue::new(&mut editor.value.font_size).range(11.0..=20.0).speed(0.5).suffix(lang.text(" pt", " пт"))); ui.end_row();
+                                ui.label(lang.text("Display timestamps", "Время сообщений")); ui.horizontal(|ui| { ui.selectable_value(&mut editor.value.utc,true,"UTC"); ui.selectable_value(&mut editor.value.utc,false,lang.text("Local time", "Местное время")); }); ui.end_row();
                             });
-                            ui.add_space(18.); section(ui, "Reading defaults", self.dark());
+                            ui.add_space(18.); section(ui, lang.text("Reading defaults", "Параметры чтения по умолчанию"), self.dark());
                             egui::Grid::new("settings-reading").num_columns(2).spacing([28., 12.]).show(ui, |ui| {
-                                ui.label("Maximum records per read"); ui.add(egui::DragValue::new(&mut editor.value.max_records).range(1..=1_000_000).speed(100.)); ui.end_row();
-                                ui.label("Active reading time"); ui.add(egui::DragValue::new(&mut editor.value.seconds).range(1..=86_400).suffix(" seconds")); ui.end_row();
-                                ui.label("Recent offset window"); ui.add(egui::DragValue::new(&mut editor.value.recent_window).range(1..=1_000_000).speed(10.)); ui.end_row();
+                                ui.label(lang.text("Maximum records per read", "Максимум сообщений за одно чтение")); ui.add(egui::DragValue::new(&mut editor.value.max_records).range(1..=1_000_000).speed(100.)); ui.end_row();
+                                ui.label(lang.text("Active reading time", "Время активного чтения")); ui.add(egui::DragValue::new(&mut editor.value.seconds).range(1..=86_400).suffix(lang.text(" seconds", " с"))); ui.end_row();
+                                ui.label(lang.text("Recent offset window", "Диапазон последних смещений")); ui.add(egui::DragValue::new(&mut editor.value.recent_window).range(1..=1_000_000).speed(10.)); ui.end_row();
                             });
-                            ui.add_space(18.); section(ui, "Retained messages · all open tabs", self.dark());
+                            ui.add_space(18.); section(ui, lang.text("Retained messages · all open tabs", "Хранение сообщений на всех открытых вкладках"), self.dark());
                             egui::Grid::new("settings-retention").num_columns(2).spacing([28., 12.]).show(ui, |ui| {
-                                ui.label("Maximum retained records"); ui.add(egui::DragValue::new(&mut editor.value.retained_records).range(100..=50_000).speed(100.)); ui.end_row();
-                                ui.label("Maximum raw payload bytes"); ui.add(egui::DragValue::new(&mut editor.value.retained_mib).range(1..=512).suffix(" MiB")); ui.end_row();
+                                ui.label(lang.text("Maximum retained records", "Максимум сообщений в памяти")); ui.add(egui::DragValue::new(&mut editor.value.retained_records).range(100..=50_000).speed(100.)); ui.end_row();
+                                ui.label(lang.text("Maximum raw payload bytes", "Предельный объём исходных данных")); ui.add(egui::DragValue::new(&mut editor.value.retained_mib).range(1..=512).suffix(lang.text(" MiB", " МиБ"))); ui.end_row();
                             });
-                            ui.add_space(8.); ui.small("Lower limits trim cached data immediately, starting with older inactive tabs. Message bodies are never saved in the workspace.");
-                            ui.add_space(10.); ui.small("Profiles, favorites, tabs and these preferences are saved locally. Restoring them never connects to Kafka.");
+                            ui.add_space(8.); ui.small(lang.text("Lower limits trim cached data immediately, starting with older inactive tabs. Message bodies are never saved in the workspace.", "При снижении лимитов данные сразу удаляются из памяти, начиная с давно неактивных вкладок. Содержимое сообщений не сохраняется в рабочем пространстве."));
+                            ui.add_space(10.); ui.small(lang.text("Profiles, favorites, tabs and these preferences are saved locally. Restoring them never connects to Kafka.", "Профили, избранное, вкладки и настройки сохраняются на этом компьютере. При их восстановлении подключение к Kafka не открывается."));
                         });
                     });
                     self.capture_dialog_if_needed(ui.ctx(), "settings"); action
@@ -451,7 +531,7 @@ impl ReaderApp {
                 Action::Save => match self.apply_settings(editor.value.clone(), ctx) {
                     Ok(()) => {}
                     Err(e) => {
-                        editor.error = e;
+                        editor.error = lang.message(&e);
                         self.settings_editor = Some(editor);
                     }
                 },
@@ -460,22 +540,27 @@ impl ReaderApp {
             }
         }
         if let Some(mut editor) = self.topic_editor.take() {
-            let action = ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("add-topic"), egui::ViewportBuilder::default().with_title("Add topic · Kafka Reader").with_inner_size([550.,280.]).with_min_inner_size([480.,260.]).with_position([220.,160.]), |ui,_| {
+            let action = ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("add-topic"), egui::ViewportBuilder::default().with_title(lang.text("Add topic · Kafka Reader", "Добавить топик · Kafka Reader")).with_inner_size([550.,280.]).with_min_inner_size([480.,260.]).with_position([220.,160.]), |ui,_| {
                 let mut action = if ui.input(|i|i.viewport().close_requested()) { Action::Cancel } else { Action::None };
                 egui::CentralPanel::default().frame(egui::Frame::new().fill(panel(self.dark())).inner_margin(22)).show(ui, |ui| {
-                    ui.heading("Register a topic"); ui.label("Enter the exact name you have access to. No cluster-wide listing is requested."); ui.add_space(12.);
-                    field(ui,"Topic name",&mut editor.name,"orders.events",false); ui.label(RichText::new(&editor.error).small());
-                    ui.horizontal(|ui| { if ui.button("Add and open").clicked(){action=Action::Save;} if ui.button("Cancel").clicked(){action=Action::Cancel;} });
+                    ui.heading(lang.text("Register a topic", "Добавить топик")); ui.label(lang.text("Enter the exact name you have access to. No cluster-wide listing is requested.", "Введите точное имя доступного вам топика. Приложение не запрашивает список топиков кластера.")); ui.add_space(12.);
+                    field(ui,lang.text("Topic name", "Имя топика"),&mut editor.name,"orders.events",false); ui.label(RichText::new(&editor.error).small());
+                    ui.horizontal(|ui| { if ui.button(lang.text("Add and open", "Добавить и открыть")).clicked(){action=Action::Save;} if ui.button(lang.text("Cancel", "Отмена")).clicked(){action=Action::Cancel;} });
                 }); action
             });
             if action == Action::Save {
                 let result = (|| {
                     if self.running() {
-                        return Err("Stop reading before adding a topic".into());
+                        return Err(lang
+                            .text(
+                                "Stop reading before adding a topic",
+                                "Остановите чтение перед добавлением топика",
+                            )
+                            .into());
                     }
                     self.workspace
                         .server_mut(editor.server)
-                        .ok_or("Server is unavailable")?
+                        .ok_or(lang.text("Server is unavailable", "Сервер недоступен"))?
                         .register_topic(editor.name.trim())?;
                     self.activate(Tab {
                         server: editor.server,
@@ -483,7 +568,7 @@ impl ReaderApp {
                     })
                 })();
                 if let Err(e) = result {
-                    editor.error = e;
+                    editor.error = lang.message(&e);
                     self.topic_editor = Some(editor);
                 }
             } else if action == Action::None {
@@ -494,7 +579,7 @@ impl ReaderApp {
             let action = ctx.show_viewport_immediate(
                 egui::ViewportId::from_hash_of("export-records"),
                 egui::ViewportBuilder::default()
-                    .with_title("Export records · Kafka Reader")
+                    .with_title(lang.text("Export records · Kafka Reader", "Экспорт сообщений · Kafka Reader"))
                     .with_inner_size([560., 260.])
                     .with_min_inner_size([500., 240.])
                     .with_position([210., 160.]),
@@ -507,21 +592,21 @@ impl ReaderApp {
                     egui::CentralPanel::default()
                         .frame(egui::Frame::new().fill(panel(self.dark())).inner_margin(22))
                         .show(ui, |ui| {
-                            ui.heading("Export visible messages");
-                            ui.label("JSONL preserves exact bytes, nulls and ordered headers.");
+                            ui.heading(lang.text("Export visible messages", "Экспорт видимых сообщений"));
+                            ui.label(lang.text("JSONL preserves exact bytes, nulls and ordered headers.", "В JSONL сохраняются исходные байты, значения null и порядок заголовков."));
                             ui.add_space(12.);
                             field(
                                 ui,
-                                "New output filename",
+                                lang.text("New output filename", "Имя нового файла"),
                                 &mut editor.path,
                                 "records.jsonl",
                                 false,
                             );
                             ui.horizontal(|ui| {
-                                if ui.button("Export JSONL").clicked() {
+                                if ui.button(lang.text("Export JSONL", "Экспорт в JSONL")).clicked() {
                                     action = Action::Save;
                                 }
-                                if ui.button("Cancel").clicked() {
+                                if ui.button(lang.text("Cancel", "Отмена")).clicked() {
                                     action = Action::Cancel;
                                 }
                             });
@@ -626,7 +711,7 @@ mod tests {
         app.export_to(editor);
         assert!(matches!(
             app.jobs_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
-            Job::Exported(_)
+            Job::Exported(ref output, 1, Ok(())) if output == &path
         ));
         let bytes = fs::read(&path).unwrap();
         let row: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
@@ -647,7 +732,7 @@ mod tests {
         let path = app.options.store.directory.join("export.properties");
         editor.file_path = path.to_str().unwrap().into();
         fs::write(&path, "original contents").unwrap();
-        editor.export();
+        editor.export(Language::English);
         assert!(editor.message.starts_with("Export failed"));
         assert_eq!(fs::read_to_string(&path).unwrap(), "original contents");
         fs::remove_file(path).unwrap();
@@ -699,6 +784,91 @@ mod tests {
             (1, 6, "3")
         );
     }
+
+    #[test]
+    fn language_draft_applies_only_on_save_and_restores_the_preference() {
+        let mut app = test_app();
+        let ctx = egui::Context::default();
+        let mut draft = SettingsEditor::new(&app.workspace.settings);
+        draft.value.language = LanguagePreference::Russian;
+        assert_eq!(app.workspace.settings.language, LanguagePreference::System);
+        app.apply_settings(draft.value, &ctx).unwrap();
+        assert_eq!(app.language(), Language::Russian);
+        let reopened = app.options.store.load().unwrap();
+        assert_eq!(reopened.settings.language, LanguagePreference::Russian);
+
+        let mut cancelled = SettingsEditor::new(&app.workspace.settings);
+        cancelled.value.language = LanguagePreference::English;
+        drop(cancelled);
+        assert_eq!(app.language(), Language::Russian);
+        let mut system = SettingsEditor::new(&app.workspace.settings);
+        system.value.language = LanguagePreference::System;
+        app.apply_settings(system.value, &ctx).unwrap();
+        assert_eq!(
+            app.options.store.load().unwrap().settings.language,
+            LanguagePreference::System
+        );
+    }
+
+    #[test]
+    fn changing_language_refreshes_active_and_cached_metadata_previews() {
+        let mut app = test_app();
+        let ctx = egui::Context::default();
+        let mut settings = app.workspace.settings.clone();
+        settings.language = LanguagePreference::English;
+        app.apply_settings(settings.clone(), &ctx).unwrap();
+        app.open_server(None);
+        let mut editor = app.server_editor.take().unwrap();
+        editor.name = "Preview test".into();
+        editor.brokers = "localhost:9092".into();
+        editor.test_topic = "first".into();
+        app.save_server(&editor).unwrap();
+        let first = app.active().unwrap().clone();
+        let select_metadata = |app: &mut ReaderApp| {
+            let record = Arc::new(demo_record(0, 7, &app.active().unwrap().topic, 0));
+            app.view.buffer.add(record.clone());
+            app.view.inspector_tab = 3;
+            app.select(record.clone());
+            record
+        };
+        let first_record = select_metadata(&mut app);
+        app.workspace
+            .server_mut(first.server)
+            .unwrap()
+            .register_topic("second")
+            .unwrap();
+        app.activate(Tab {
+            server: first.server,
+            topic: "second".into(),
+        })
+        .unwrap();
+        let second_record = select_metadata(&mut app);
+
+        // Both English jobs may still be in flight when the Russian previews are queued.
+        settings.language = LanguagePreference::Russian;
+        app.apply_settings(settings, &ctx).unwrap();
+        // Deliver the older results last, including the one for the inactive tab.
+        let mut jobs = Vec::new();
+        for _ in 0..4 {
+            jobs.push(app.jobs_rx.recv_timeout(Duration::from_secs(5)).unwrap());
+        }
+        jobs.sort_by_key(|job| match job {
+            Job::Formatted(_, generation, _) => std::cmp::Reverse(*generation),
+            Job::Exported(..) => panic!("Unexpected export"),
+        });
+        for job in jobs {
+            app.jobs_tx.send(job).unwrap();
+        }
+        app.drain();
+        for (view, record) in [
+            (&app.view, &second_record),
+            (&app.cached[&first], &first_record),
+        ] {
+            assert!(!view.pending_preview);
+            assert!(view.formatted.contains("Смещение"));
+            assert!(Arc::ptr_eq(view.selected.as_ref().unwrap(), record));
+        }
+    }
     #[test]
     fn typed_auth_tls_and_advanced_produce_native_settings() {
         let server = Server {
@@ -718,7 +888,7 @@ mod tests {
         editor.key = "private.pem".into();
         editor.key_password = "SENTINEL_KEY_PASSWORD".into();
         editor.advanced="isolation.level=read_committed\nsasl.password=overridden\nssl.key.pem=INLINE_PRIVATE_SENTINEL".into();
-        let (server, secrets) = editor.build().unwrap();
+        let (server, secrets) = editor.build(Language::English).unwrap();
         assert_eq!(server.properties["security.protocol"], "SASL_SSL");
         assert_eq!(server.properties["sasl.mechanism"], "SCRAM-SHA-512");
         assert_eq!(server.properties["ssl.ca.location"], "ca.pem");
@@ -742,7 +912,7 @@ mod tests {
         editor.name = "Unsaved change".into();
         editor.brokers = "example:9092".into();
         editor.password = "SECRET".into();
-        let (changed, _) = editor.build().unwrap();
+        let (changed, _) = editor.build(Language::English).unwrap();
         assert_ne!(changed.name, original.name);
         assert_eq!(original.name, "Original");
         assert!(original.properties.is_empty());

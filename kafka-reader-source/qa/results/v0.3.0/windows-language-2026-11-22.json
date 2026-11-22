@@ -1,0 +1,44 @@
+{
+  "date": "2026-11-22",
+  "target": "x86_64-pc-windows-gnu",
+  "host": "Windows-11-10.0.26300-SP0",
+  "binary_sha256": "3c4e43056b5bc5e3a77a7d7d3c4e4e6015b97ba80740269eaa08fda2434362b9",
+  "format_check": "PASS",
+  "release_tests": {
+    "library_passed": 34,
+    "application_passed": 18,
+    "failed": 0
+  },
+  "offline_self_test": {
+    "checks": 9,
+    "result": "PASS"
+  },
+  "windows_display_langid": "0x409",
+  "system_default_on_host": "English",
+  "russian_display_langid_0x0419": "unit tested",
+  "gui_smoke": {
+    "appVersion": "0.3.0",
+    "checks": 49,
+    "guiSmoke": "PASS",
+    "nativeChildViewport": true,
+    "openTabs": 4,
+    "retained": 120
+  },
+  "gui_reopen": {
+    "appVersion": "0.3.0",
+    "checks": 17,
+    "credentialsRestored": false,
+    "guiReopen": "PASS",
+    "language": "russian",
+    "offlineServersRestored": 0,
+    "realServersRestored": 1,
+    "recordsRestored": 0,
+    "sessionStarted": false
+  },
+  "native_settings_screenshot": "docs/screenshots/v0.3.0/windows-russian-settings.png",
+  "visual_review": [
+    "Russian settings window with Russian selected",
+    "Russian workspace at 1050 x 720",
+    "Russian workspace after restart"
+  ]
+}

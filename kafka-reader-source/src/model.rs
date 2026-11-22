@@ -1,3 +1,4 @@
+use crate::language::Language;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -80,11 +81,15 @@ impl Record {
 }
 
 pub fn preview(bytes: Option<&[u8]>, chars: usize) -> String {
+    preview_in(Language::English, bytes, chars)
+}
+
+pub fn preview_in(language: Language, bytes: Option<&[u8]>, chars: usize) -> String {
     let Some(b) = bytes else {
-        return "∅ null / tombstone".into();
+        return language.text("∅ null / tombstone", "∅ null").into();
     };
     if b.is_empty() {
-        return "(empty value)".into();
+        return language.text("(empty value)", "(пусто)").into();
     }
     let limit = b.len().min(chars.saturating_mul(4).saturating_add(4));
     let mut prefix = &b[..limit];
@@ -98,14 +103,17 @@ pub fn preview(bytes: Option<&[u8]>, chars: usize) -> String {
             decoded = std::str::from_utf8(prefix);
         }
     }
-    let Ok(s) = decoded else {
-        return format!("[binary · {} bytes]", b.len());
+    let Some(s) = decoded.ok().filter(|s| {
+        !s.chars()
+            .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+    }) else {
+        return format!(
+            "[{} · {} {}]",
+            language.text("binary", "двоичные данные"),
+            b.len(),
+            language.text("bytes", "Б")
+        );
     };
-    if s.chars()
-        .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
-    {
-        return format!("[binary · {} bytes]", b.len());
-    }
     let mut result: String = s
         .chars()
         .take(chars)
@@ -118,11 +126,22 @@ pub fn preview(bytes: Option<&[u8]>, chars: usize) -> String {
 }
 
 pub fn text(bytes: Option<&[u8]>) -> String {
+    text_in(Language::English, bytes)
+}
+
+pub fn text_in(language: Language, bytes: Option<&[u8]>) -> String {
     let Some(b) = bytes else {
-        return "<null — distinct from an empty byte array>".into();
+        return language
+            .text(
+                "<null — distinct from an empty byte array>",
+                "<null — значение отсутствует>",
+            )
+            .into();
     };
     if b.is_empty() {
-        return "<empty — 0 bytes>".into();
+        return language
+            .text("<empty — 0 bytes>", "<пусто — 0 байт>")
+            .into();
     }
     let len = b.len().min(PREVIEW_BYTES);
     let mut prefix = &b[..len];
@@ -141,24 +160,42 @@ pub fn text(bytes: Option<&[u8]>) -> String {
             "{}{}",
             s,
             if len < b.len() {
-                "\n\n[Preview limited to 256 KiB. JSONL export preserves every byte.]"
+                language.text(
+                    "\n\n[Preview limited to 256 KiB. JSONL export preserves every byte.]",
+                    "\n\n[Показаны первые 256 КиБ. Экспорт JSONL сохраняет все байты.]",
+                )
             } else {
                 ""
             }
         ),
         Err(_) => format!(
-            "<binary / invalid UTF-8 · {} bytes>\nUse Hex or export raw Base64.",
-            b.len()
+            "<{} · {} {}>\n{}",
+            language.text(
+                "binary / invalid UTF-8",
+                "двоичные данные / некорректный UTF-8"
+            ),
+            b.len(),
+            language.text("bytes", "Б"),
+            language.text(
+                "Use Hex or export raw Base64.",
+                "Выберите Hex или экспортируйте данные в Base64."
+            )
         ),
     }
 }
 
 pub fn hex(bytes: Option<&[u8]>) -> String {
+    hex_in(Language::English, bytes)
+}
+
+pub fn hex_in(language: Language, bytes: Option<&[u8]>) -> String {
     let Some(b) = bytes else {
         return "<null>".into();
     };
     if b.is_empty() {
-        return "<empty — 0 bytes>".into();
+        return language
+            .text("<empty — 0 bytes>", "<пусто — 0 байт>")
+            .into();
     }
     let mut result = String::new();
     use std::fmt::Write as _;
@@ -182,27 +219,49 @@ pub fn hex(bytes: Option<&[u8]>) -> String {
         result.push('\n');
     }
     if b.len() > 8192 {
-        result.push_str("\n[Hex preview limited to 8 KiB; export preserves full bytes.]\n");
+        result.push_str(language.text(
+            "\n[Hex preview limited to 8 KiB; export preserves full bytes.]\n",
+            "\n[В режиме Hex показаны первые 8 КиБ. Экспорт сохраняет все байты.]\n",
+        ));
     }
     result
 }
 
 pub fn pretty_json(bytes: Option<&[u8]>) -> String {
+    pretty_json_in(Language::English, bytes)
+}
+
+pub fn pretty_json_in(language: Language, bytes: Option<&[u8]>) -> String {
     let Some(b) = bytes else {
-        return "// null value — Kafka tombstone".into();
+        return language
+            .text(
+                "// null value — Kafka tombstone",
+                "// null — маркер удаления Kafka",
+            )
+            .into();
     };
     if b.is_empty() {
-        return "// Empty payload: 0 bytes".into();
+        return language
+            .text("// Empty payload: 0 bytes", "// Пустое значение, 0 байт")
+            .into();
     }
     if b.len() > PREVIEW_BYTES {
-        return "// JSON preview exceeds 256 KiB; export the complete record.".into();
+        return language
+            .text(
+                "// JSON preview exceeds 256 KiB; export the complete record.",
+                "// Размер JSON превышает 256 КиБ. Экспортируйте запись целиком.",
+            )
+            .into();
     }
     match serde_json::from_slice::<Value>(b).and_then(|v| serde_json::to_string_pretty(&v)) {
         Ok(s) if s.len() <= 512 * 1024 => s,
-        Ok(_) => "// Formatted JSON exceeds 512 KiB; use Text or export.".into(),
+        Ok(_) => language.text("// Formatted JSON exceeds 512 KiB; use Text or export.",
+            "// Размер JSON с отступами превышает 512 КиБ. Выберите «Текст» или экспортируйте запись.").into(),
         Err(_) => format!(
-            "// Not a valid JSON document.\n// Use Text or Hex.\n\n{}",
-            preview(Some(b), 1500)
+            "{}\n\n{}",
+            language.text("// Not a valid JSON document.\n// Use Text or Hex.",
+                "// Некорректный JSON.\n// Выберите «Текст» или Hex."),
+            preview_in(language, Some(b), 1500)
         ),
     }
 }

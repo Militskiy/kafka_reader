@@ -1,4 +1,5 @@
 //! Local workspace persistence. Session credentials never enter the serialized model.
+use crate::language::LanguagePreference;
 use crate::model::{Properties, secret_key};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -18,6 +19,7 @@ pub const MAX_TABS: usize = 8;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub language: LanguagePreference,
     pub dark: bool,
     pub compact_rows: bool,
     pub font_size: f32,
@@ -31,6 +33,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            language: LanguagePreference::System,
             dark: true,
             compact_rows: false,
             font_size: 14.,

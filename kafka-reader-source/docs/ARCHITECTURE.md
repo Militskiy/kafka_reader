@@ -27,6 +27,7 @@ enables X11, so Wayland sessions require XWayland. There is no embedded browser.
 | [src/app/presentation.rs](../src/app/presentation.rs) | Numeric sorting, timestamp availability, Auto/JSON/Text/Hex payload display |
 | [src/app/dialogs.rs](../src/app/dialogs.rs) | Separate native configuration windows, drafts, exact-topic tests, save/cancel |
 | [src/workspace.rs](../src/workspace.rs) | Saved profiles/settings/tabs, validation, sample migration, credential filtering, atomic writes |
+| [src/language.rs](../src/language.rs) | Saved desktop language preference and platform display-language detection |
 | [src/reader.rs](../src/reader.rs) | Request execution, configuration policy, bounds, worker controls and bounded events |
 | [src/direct_consumer.rs](../src/direct_consumer.rs) | Narrow unsafe adapter for native partition queues and owned message copies |
 | [src/model.rs](../src/model.rs) | Raw records, buffer accounting, offset calculations, previews, properties and JSONL |
@@ -112,6 +113,12 @@ old data is not relabeled with a changed connection. Add/Edit server and App
 settings are real native viewports with drafts; Cancel discards the draft, and
 saving a server does not connect it. The draft's initial tab must fit before
 the server can be saved. Changing appearance preserves each tab's read limits.
+
+The saved language preference is `system`, `english`, or `russian`. Workspaces
+created before this preference existed default to `system`. In system mode the
+desktop resolves the Windows user-interface language or Linux message locale
+on startup. Manual selection takes effect on Apply. Localized annotations are
+rendered separately from Kafka values, identifiers, CLI output, and JSONL keys.
 
 Records stay in an arrival-ordered `VecDeque`. Filtering and numeric sorting
 produce a separate vector of `Arc` references; they do not mutate retention

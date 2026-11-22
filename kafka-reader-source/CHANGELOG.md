@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added a Russian desktop interface. App settings can follow the system display
+  language or save an explicit English or Russian preference.
+
 - Isolated GUI smoke workspaces and broker integration fixtures from existing user data.
 - Required broker Metadata v4 to protect exact-topic lookups from automatic topic creation.
 - Preserved terminal read outcomes and skipped counts under backpressure, and

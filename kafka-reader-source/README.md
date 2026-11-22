@@ -85,6 +85,14 @@ default record/time/recent-window limits and the shared record/byte budget.
 Settings are drafts until **Apply settings**. Lowering retention trims existing
 caches immediately, starting with older inactive tabs.
 
+The desktop follows the system display language by default. A Russian display
+language selects Russian, with English as the fallback. To override it, open
+**App settings → Language**, choose **English** or **Русский**, and click
+**Apply settings**. The change takes effect immediately and is saved for the
+next launch. Choose **System default** (**Как в системе**) to follow the
+operating system again. On Windows the app uses the user's display language.
+On Linux it uses the locale for messages and its language preferences.
+
 Shortcuts: **Ctrl+Enter** reads the active topic; **Ctrl+F** focuses loaded-message
 search; **Ctrl+,** opens App settings.
 

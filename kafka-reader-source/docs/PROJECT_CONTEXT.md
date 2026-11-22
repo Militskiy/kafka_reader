@@ -23,6 +23,7 @@ Keep that distinction when editing labels, packaging, commands, and migrations.
 |---|---|
 | Overall UX | Bruno is the preferred inspiration, ahead of Postman. Keep a compact server/topic workspace; use the supplied direction as inspiration, not a pixel-for-pixel copy. |
 | Appearance | Restrained dark theme with amber accents, optional light theme, compact rows and adjustable font size. |
+| Language | The desktop defaults to the system display language and supports English and Russian. A manual choice in App settings applies immediately and persists in the workspace. |
 | Navigation | Expandable saved servers/topics, search, Favorites, and closable topic tabs. Exact topic registration works without cluster-wide discovery. |
 | Server configuration | Separate native Add/Edit server window with Connection, Authentication, TLS, Advanced tabs and draft Save/Cancel behavior. |
 | App settings | Separate native window for appearance, reading defaults, timestamp display and retention limits. Keep server credentials in server configuration. |
@@ -99,6 +100,10 @@ Sondahub bridge. Its disposable Kafka 4.1.2 fixture passed 20 checks, including
 topic-only SASL/PLAIN access, unchanged consumer-group state and finite reads
 during an open transaction. See the
 [Windows review-build results](../qa/results/v0.3.0/windows-review-fixes-2026-11-22.json).
+
+The [Windows language check](../qa/results/v0.3.0/windows-language-2026-11-22.json)
+records a later build running with the host's English display language, then
+switching to Russian in App settings and reopening in Russian.
 
 Other current limits:
 
