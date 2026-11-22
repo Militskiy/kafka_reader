@@ -1,0 +1,15 @@
+{
+  "version": "0.3.0",
+  "binary": "kafka-reader",
+  "bytes": 17599544,
+  "sha256": "dc729010c4744f83c04b1c4ee245f6fd858287ab4e0b3a6f54b57dfa1334af1c",
+  "format": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, for GNU/Linux 3.2.0, BuildID[sha1]=781b9a47bfe41d6a155a2e64b2ff93e638a9e8b2, stripped",
+  "requiredLibraries": [
+    "libgcc_s.so.1",
+    "libm.so.6",
+    "libc.so.6",
+    "ld-linux-x86-64.so.2"
+  ],
+  "minGlibc": "2.38",
+  "scope": "ELF dependency/symbol inspection; graphical execution verified separately"
+}

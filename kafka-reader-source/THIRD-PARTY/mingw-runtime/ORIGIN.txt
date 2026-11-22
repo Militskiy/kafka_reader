@@ -1,0 +1,1 @@
+Original copyright/license notices from the isolated Debian MinGW-w64 GCC 14 build toolchain. These cover compiler-support/runtime and Windows-target headers/libraries used by the static GNU-target build. Toolchain executables themselves are not redistributed in this application.

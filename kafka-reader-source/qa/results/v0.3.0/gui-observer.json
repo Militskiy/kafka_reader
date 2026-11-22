@@ -1,0 +1,191 @@
+{
+  "appVersion": "0.3.0",
+  "kind": "rust",
+  "executableSha256": "dc729010c4744f83c04b1c4ee245f6fd858287ab4e0b3a6f54b57dfa1334af1c",
+  "completedAtUtc": "2026-11-22T13:05:16.711486+00:00",
+  "status": "PASS",
+  "checks": {
+    "normalStartupExitZero": true,
+    "normalStartupScreenshotExists": true,
+    "normalStartupHasNoSavedServersOrTabs": true,
+    "syntheticServerNotPersisted": true,
+    "smokeExitZero": true,
+    "smokeReportsPass": true,
+    "reopenExitZero": true,
+    "reopenReportsPass": true,
+    "reopenReportExists": true,
+    "requiredNativeWindowsObserved": true,
+    "configurationWindowsSeparate": true,
+    "sentinelsAbsentFromPersistedFiles": true
+  },
+  "observedPhases": {
+    "connection": true,
+    "authentication": true,
+    "tls": true,
+    "advanced": true,
+    "settings": true,
+    "main": true
+  },
+  "secretLeaks": [],
+  "nativeWindows": [
+    {
+      "run": "smoke",
+      "phase": "key-text",
+      "windowTitle": "Kafka Reader",
+      "kind": "main",
+      "windowId": "0x200003",
+      "mainWindowId": "0x200003",
+      "separateNativeWindow": true,
+      "size": [
+        1400,
+        900
+      ],
+      "screenshot": "docs/screenshots/v0.3.0/kafka-reader-key-text.png"
+    },
+    {
+      "run": "smoke",
+      "phase": "key-hex",
+      "windowTitle": "Kafka Reader",
+      "kind": "main",
+      "windowId": "0x200003",
+      "mainWindowId": "0x200003",
+      "separateNativeWindow": true,
+      "size": [
+        1400,
+        900
+      ],
+      "screenshot": "docs/screenshots/v0.3.0/kafka-reader-key-hex.png"
+    },
+    {
+      "run": "smoke",
+      "phase": "main",
+      "windowTitle": "Kafka Reader",
+      "kind": "main",
+      "windowId": "0x200003",
+      "mainWindowId": "0x200003",
+      "separateNativeWindow": true,
+      "size": [
+        1400,
+        900
+      ],
+      "screenshot": "docs/screenshots/v0.3.0/kafka-reader-messages.png"
+    },
+    {
+      "run": "smoke",
+      "phase": "connection",
+      "windowTitle": "Add server \u00b7 Kafka Reader",
+      "kind": "server",
+      "windowId": "0x200008",
+      "mainWindowId": "0x200003",
+      "separateNativeWindow": true,
+      "size": [
+        730,
+        650
+      ],
+      "screenshot": "docs/screenshots/v0.3.0/kafka-reader-connection.png"
+    },
+    {
+      "run": "smoke",
+      "phase": "authentication",
+      "windowTitle": "Add server \u00b7 Kafka Reader",
+      "kind": "server",
+      "windowId": "0x200008",
+      "mainWindowId": "0x200003",
+      "separateNativeWindow": true,
+      "size": [
+        730,
+        650
+      ],
+      "screenshot": "docs/screenshots/v0.3.0/kafka-reader-authentication.png"
+    },
+    {
+      "run": "smoke",
+      "phase": "tls",
+      "windowTitle": "Add server \u00b7 Kafka Reader",
+      "kind": "server",
+      "windowId": "0x200008",
+      "mainWindowId": "0x200003",
+      "separateNativeWindow": true,
+      "size": [
+        730,
+        650
+      ],
+      "screenshot": "docs/screenshots/v0.3.0/kafka-reader-tls.png"
+    },
+    {
+      "run": "smoke",
+      "phase": "advanced",
+      "windowTitle": "Add server \u00b7 Kafka Reader",
+      "kind": "server",
+      "windowId": "0x200008",
+      "mainWindowId": "0x200003",
+      "separateNativeWindow": true,
+      "size": [
+        730,
+        650
+      ],
+      "screenshot": "docs/screenshots/v0.3.0/kafka-reader-advanced.png"
+    },
+    {
+      "run": "smoke",
+      "phase": "settings",
+      "windowTitle": "App settings \u00b7 Kafka Reader",
+      "kind": "settings",
+      "windowId": "0x20000c",
+      "mainWindowId": "0x200003",
+      "separateNativeWindow": true,
+      "size": [
+        670,
+        700
+      ],
+      "screenshot": "docs/screenshots/v0.3.0/kafka-reader-settings.png"
+    },
+    {
+      "run": "smoke",
+      "phase": "light",
+      "windowTitle": "Kafka Reader",
+      "kind": "main",
+      "windowId": "0x200003",
+      "mainWindowId": "0x200003",
+      "separateNativeWindow": true,
+      "size": [
+        1400,
+        900
+      ],
+      "screenshot": "docs/screenshots/v0.3.0/kafka-reader-light.png"
+    },
+    {
+      "run": "smoke",
+      "phase": "compact",
+      "windowTitle": "Kafka Reader",
+      "kind": "main",
+      "windowId": "0x200003",
+      "mainWindowId": "0x200003",
+      "separateNativeWindow": true,
+      "size": [
+        1050,
+        720
+      ],
+      "screenshot": "docs/screenshots/v0.3.0/kafka-reader-compact.png"
+    },
+    {
+      "run": "reopen",
+      "phase": "reopened",
+      "windowTitle": "Kafka Reader",
+      "kind": "main",
+      "windowId": "0x200003",
+      "mainWindowId": "0x200003",
+      "separateNativeWindow": true,
+      "size": [
+        1400,
+        900
+      ],
+      "screenshot": "docs/screenshots/v0.3.0/kafka-reader-reopened.png"
+    }
+  ],
+  "persistedFiles": [
+    "workspace.json"
+  ],
+  "normalStartupScreenshot": "docs/screenshots/v0.3.0/kafka-reader-empty.png",
+  "scope": "Actual Linux desktop processes with in-app action assertions, independent X11 window/framebuffer observations and saved-file scans. No production broker connection or Windows runtime execution."
+}

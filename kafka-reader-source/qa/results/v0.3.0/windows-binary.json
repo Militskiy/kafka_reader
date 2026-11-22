@@ -1,0 +1,31 @@
+{
+  "version": "0.3.0",
+  "binary": "kafka-reader.exe",
+  "bytes": 17695744,
+  "sha256": "7d6afd62e700a094a9f9651704945e09a67a09327b9b2b7ad0a3055a56d22e5d",
+  "format": "PE32+ executable for MS Windows 5.02 (GUI), x86-64 (stripped to external PDB), 11 sections",
+  "imports": [
+    "advapi32.dll",
+    "api-ms-win-core-synch-l1-2-0.dll",
+    "bcryptprimitives.dll",
+    "crypt32.dll",
+    "dwmapi.dll",
+    "gdi32.dll",
+    "imm32.dll",
+    "kernel32.dll",
+    "KERNEL32.dll",
+    "msvcrt.dll",
+    "ntdll.dll",
+    "ole32.dll",
+    "OPENGL32.dll",
+    "secur32.dll",
+    "shell32.dll",
+    "user32.dll",
+    "uxtheme.dll",
+    "ws2_32.dll",
+    "WS2_32.dll"
+  ],
+  "singlePortableExe": true,
+  "windowsExecution": "not tested; cross-compiled and imports audited only",
+  "subsystem": "00000002\t(Windows GUI)"
+}

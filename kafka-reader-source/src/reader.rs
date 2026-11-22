@@ -1,0 +1,606 @@
+use crate::direct_consumer::{DirectConsumer, Poll};
+use crate::model::*;
+use crossbeam_channel::{Receiver, SendTimeoutError, Sender, bounded};
+use rdkafka::{
+    ClientConfig, Offset, TopicPartitionList,
+    consumer::{BaseConsumer, Consumer},
+};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+
+#[derive(Debug)]
+pub enum Event {
+    Metadata(Vec<Partition>),
+    Record(Arc<Record>),
+    State(String, String),
+    Progress(usize),
+    Skipped,
+}
+
+#[derive(Default)]
+pub struct Control {
+    pub stop: AtomicBool,
+    pub pause: AtomicBool,
+    pub finished: AtomicBool,
+    pub queued_bytes: AtomicUsize,
+}
+pub struct Session {
+    pub rx: Receiver<Event>,
+    pub control: Arc<Control>,
+}
+impl Session {
+    pub fn start(request: Request) -> Self {
+        let (tx, rx) = bounded(256);
+        let control = Arc::new(Control::default());
+        let ctl = control.clone();
+        thread::Builder::new()
+            .name("kafka-rust-reader".into())
+            .spawn(move || {
+                let result = if request.demo {
+                    demo(&request, &tx, &ctl)
+                } else {
+                    real(&request, &tx, &ctl)
+                };
+                let state = if ctl.stop.load(Ordering::Acquire) {
+                    (
+                        "STOPPED".into(),
+                        "Stopped. No offsets were committed.".into(),
+                    )
+                } else {
+                    match result {
+                        Ok(detail) => ("COMPLETED".into(), detail),
+                        Err(e) => ("FAILED".into(), redact(&e, &request.props)),
+                    }
+                };
+                let _ = tx.send_timeout(Event::State(state.0, state.1), Duration::from_millis(500));
+                ctl.finished.store(true, Ordering::Release);
+            })
+            .expect("Cannot create Kafka worker");
+        Self { rx, control }
+    }
+    pub fn try_next(&self) -> Option<Event> {
+        match self.rx.try_recv() {
+            Ok(event) => {
+                if let Event::Record(r) = &event {
+                    self.control
+                        .queued_bytes
+                        .fetch_sub(r.bytes(), Ordering::AcqRel);
+                }
+                Some(event)
+            }
+            Err(_) => None,
+        }
+    }
+    pub fn stop(&self) {
+        self.control.stop.store(true, Ordering::Release);
+    }
+    pub fn paused(&self) -> bool {
+        self.control.pause.load(Ordering::Acquire)
+    }
+    pub fn toggle_pause(&self) {
+        self.control.pause.fetch_xor(true, Ordering::AcqRel);
+    }
+    pub fn running(&self) -> bool {
+        !self.control.finished.load(Ordering::Acquire)
+    }
+}
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn emit(tx: &Sender<Event>, ctl: &Control, mut event: Event) -> bool {
+    let bytes = if let Event::Record(r) = &event {
+        r.bytes()
+    } else {
+        0
+    };
+    if bytes > PENDING_BYTES {
+        let _ = tx.try_send(Event::Skipped);
+        return true;
+    }
+    if bytes > 0 {
+        loop {
+            if ctl.stop.load(Ordering::Acquire) {
+                return false;
+            }
+            let used = ctl.queued_bytes.load(Ordering::Acquire);
+            if used + bytes <= PENDING_BYTES
+                && ctl
+                    .queued_bytes
+                    .compare_exchange(used, used + bytes, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+    loop {
+        match tx.send_timeout(event, Duration::from_millis(50)) {
+            Ok(()) => return true,
+            Err(SendTimeoutError::Disconnected(_)) => {
+                if bytes > 0 {
+                    ctl.queued_bytes.fetch_sub(bytes, Ordering::AcqRel);
+                }
+                return false;
+            }
+            Err(SendTimeoutError::Timeout(e)) => {
+                event = e;
+                if ctl.stop.load(Ordering::Acquire) {
+                    if bytes > 0 {
+                        ctl.queued_bytes.fetch_sub(bytes, Ordering::AcqRel);
+                    }
+                    return false;
+                }
+            }
+        }
+    }
+}
+fn state(tx: &Sender<Event>, ctl: &Control, name: &str, detail: &str) {
+    emit(tx, ctl, Event::State(name.into(), detail.into()));
+}
+
+pub fn safe_properties(source: &Properties) -> Properties {
+    let mut p = Properties::new();
+    for (k, v) in source {
+        if !k.starts_with("reader.")
+            && !matches!(
+                k.as_str(),
+                "group.id"
+                    | "group.instance.id"
+                    | "interceptor.classes"
+                    | "plugin.library.paths"
+                    | "sasl.kerberos.kinit.cmd"
+                    | "metric.reporters"
+                    | "key.deserializer"
+                    | "value.deserializer"
+                    | "sasl.jaas.config"
+            )
+        {
+            p.insert(k.clone(), v.clone());
+        }
+    }
+    for (k, v) in [
+        ("enable.auto.commit", "false".into()),
+        ("auto.commit.enable", "false".into()),
+        ("offset.store.method", "broker".into()),
+        ("enable.auto.offset.store", "false".into()),
+        ("allow.auto.create.topics", "false".into()),
+        ("enable.partition.eof", "true".into()),
+        ("auto.offset.reset", "error".into()),
+        ("socket.timeout.ms", "5000".into()),
+        ("socket.connection.setup.timeout.ms", "5000".into()),
+        ("queued.max.messages.kbytes", "8192".into()),
+        ("queued.min.messages", "100".into()),
+        ("fetch.max.bytes", "8388608".into()),
+        ("fetch.message.max.bytes", "2097152".into()),
+        ("enable.metrics.push", "false".into()),
+    ] {
+        p.insert(k.into(), v);
+    }
+    p.entry("isolation.level".into())
+        .or_insert_with(|| "read_committed".into());
+    p.entry("client.id".into())
+        .or_insert_with(|| "kafka-reader-rust".into());
+    p.entry("enable.ssl.certificate.verification".into())
+        .or_insert_with(|| "true".into());
+    p.entry("ssl.endpoint.identification.algorithm".into())
+        .or_insert_with(|| "https".into());
+    p
+}
+
+fn timeout(deadline: Instant) -> Result<Duration, String> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        Err("Topic inspection exceeded 20 seconds. Check broker addresses, network and security settings.".into())
+    } else {
+        Ok(remaining.min(Duration::from_secs(5)))
+    }
+}
+
+fn real(req: &Request, tx: &Sender<Event>, ctl: &Control) -> Result<String, String> {
+    if req.topic.trim().is_empty() {
+        return Err("Enter the exact topic name".into());
+    }
+    if req
+        .props
+        .get("bootstrap.servers")
+        .is_none_or(|v| v.trim().is_empty())
+    {
+        return Err("Enter bootstrap.servers as host:port".into());
+    }
+    if req.props.contains_key("sasl.jaas.config") {
+        return Err("This is a librdkafka client. Replace Java sasl.jaas.config with sasl.username and sasl.password in session properties.".into());
+    }
+    if req
+        .props
+        .get("security.protocol")
+        .is_some_and(|v| v.to_uppercase().starts_with("SASL"))
+    {
+        let mechanism = req
+            .props
+            .get("sasl.mechanism")
+            .or_else(|| req.props.get("sasl.mechanisms"))
+            .map(|v| v.to_uppercase())
+            .unwrap_or_else(|| "PLAIN".into());
+        if !matches!(
+            mechanism.as_str(),
+            "PLAIN" | "SCRAM-SHA-256" | "SCRAM-SHA-512"
+        ) {
+            return Err(
+                "This prototype supports only SASL PLAIN, SCRAM-SHA-256 and SCRAM-SHA-512".into(),
+            );
+        }
+    }
+    state(tx, ctl, "CONNECTING", "Inspecting only the supplied topic…");
+    let p = safe_properties(&req.props);
+    let mut config = ClientConfig::new();
+    for (k, v) in &p {
+        config.set(k, v);
+    }
+    let consumer: BaseConsumer = config
+        .create()
+        .map_err(|e| format!("Invalid Kafka configuration: {e}"))?;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let metadata = consumer
+        .fetch_metadata(Some(&req.topic), timeout(deadline)?)
+        .map_err(|e| format!("Topic metadata failed: {e}"))?;
+    if ctl.stop.load(Ordering::Acquire) {
+        return Ok("Stopped".into());
+    }
+    let topic = metadata
+        .topics()
+        .iter()
+        .find(|t| t.name() == req.topic)
+        .ok_or("Topic is absent from the metadata response")?;
+    if let Some(error) = topic.error() {
+        return Err(format!("Topic access failed: {error:?}"));
+    }
+    let available: BTreeSet<i32> = topic.partitions().iter().map(|p| p.id()).collect();
+    let selected: Vec<i32> = if req.partitions.is_empty() {
+        available.iter().copied().collect()
+    } else {
+        req.partitions
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    };
+    if selected.is_empty() || selected.iter().any(|p| !available.contains(p)) {
+        return Err("A selected partition does not exist in this topic".into());
+    }
+    let mut bounds = Vec::new();
+    for partition in selected {
+        if ctl.stop.load(Ordering::Acquire) {
+            return Ok("Stopped".into());
+        }
+        // Modern librdkafka ListOffsets honors isolation.level: read_committed => LSO.
+        let (begin, end) = consumer
+            .fetch_watermarks(&req.topic, partition, timeout(deadline)?)
+            .map_err(|e| format!("Offset inspection failed for partition {partition}: {e}"))?;
+        if begin < 0 || end < begin {
+            return Err("Broker returned inconsistent partition bounds".into());
+        }
+        bounds.push(Partition {
+            partition,
+            beginning: begin,
+            end,
+        });
+    }
+    emit(tx, ctl, Event::Metadata(bounds.clone()));
+    if req.inspect {
+        return Ok("Topic access verified".into());
+    }
+    let mut time_offsets = BTreeMap::new();
+    if req.mode == Mode::Timestamp {
+        let mut times = TopicPartitionList::new();
+        for p in &bounds {
+            times
+                .add_partition_offset(&req.topic, p.partition, Offset::Offset(req.value))
+                .map_err(|e| e.to_string())?;
+        }
+        let found = consumer
+            .offsets_for_times(times, timeout(deadline)?)
+            .map_err(|e| format!("Timestamp lookup failed: {e}"))?;
+        for e in found.elements() {
+            if let Offset::Offset(o) = e.offset() {
+                if o >= 0 {
+                    time_offsets.insert(e.partition(), o);
+                }
+            }
+        }
+    }
+    let mut assignment = TopicPartitionList::new();
+    let mut positions = BTreeMap::new();
+    let mut ends = BTreeMap::new();
+    let mut finished = BTreeSet::new();
+    for p in &bounds {
+        let start = start_offset(
+            req.mode,
+            req.value,
+            p.beginning,
+            p.end,
+            time_offsets.get(&p.partition).copied(),
+        )?;
+        assignment
+            .add_partition_offset(&req.topic, p.partition, Offset::Offset(start))
+            .map_err(|e| e.to_string())?;
+        positions.insert(p.partition, start);
+        ends.insert(p.partition, p.end);
+        if !req.follow && start >= p.end {
+            finished.insert(p.partition);
+        }
+    }
+    // A high-level assignment with group.id triggers coordinator requests. The
+    // low-level partition queue is deliberately group-free and uses absolute starts.
+    let direct = DirectConsumer::new(&consumer, &req.topic, &positions)?;
+    state(
+        tx,
+        ctl,
+        "READING",
+        if req.follow {
+            "Following direct partition assignments"
+        } else {
+            "Reading to the captured exclusive ends"
+        },
+    );
+    let mut fetched = 0usize;
+    let mut active = Duration::ZERO;
+    let mut previous = Instant::now();
+    let mut last_progress = Instant::now();
+    let mut was_paused = false;
+    let mut pause_finished = TopicPartitionList::new();
+    for p in &finished {
+        pause_finished.add_partition(&req.topic, *p);
+    }
+    if pause_finished.count() > 0 {
+        consumer.pause(&pause_finished).map_err(|e| e.to_string())?;
+    }
+    loop {
+        if ctl.stop.load(Ordering::Acquire) {
+            break;
+        }
+        if !req.follow && finished.len() == bounds.len() {
+            break;
+        }
+        if req.max_records > 0 && fetched >= req.max_records {
+            return Ok(format!("Record limit reached · {fetched} fetched"));
+        }
+        let now = Instant::now();
+        let delta = now - previous;
+        previous = now;
+        if ctl.pause.load(Ordering::Acquire) {
+            if !was_paused {
+                consumer.pause(&assignment).map_err(|e| e.to_string())?;
+                state(
+                    tx,
+                    ctl,
+                    "PAUSED",
+                    "Paused; retained messages remain available",
+                );
+                was_paused = true;
+            }
+            last_progress += delta;
+            thread::sleep(Duration::from_millis(40));
+            continue;
+        }
+        if was_paused {
+            let mut resume = TopicPartitionList::new();
+            for p in ends.keys().filter(|p| !finished.contains(p)) {
+                resume.add_partition(&req.topic, *p);
+            }
+            consumer.resume(&resume).map_err(|e| e.to_string())?;
+            state(tx, ctl, "READING", "Resumed");
+            was_paused = false;
+        }
+        active += delta;
+        if req.seconds > 0 && active >= Duration::from_secs(req.seconds) {
+            return Ok(format!("Time limit reached · {fetched} fetched"));
+        }
+        match direct.poll()? {
+            Poll::Record(record) => {
+                let p = record.partition;
+                let offset = record.offset;
+                positions.insert(p, offset + 1);
+                last_progress = Instant::now();
+                if req.follow || offset < *ends.get(&p).unwrap_or(&0) {
+                    fetched += 1;
+                    if !emit(tx, ctl, Event::Record(Arc::new(record))) {
+                        break;
+                    }
+                    emit(tx, ctl, Event::Progress(fetched));
+                }
+            }
+            Poll::Eof(p, offset) => {
+                positions.insert(p, offset);
+                last_progress = Instant::now();
+            }
+            Poll::Empty => {}
+        }
+        if !req.follow {
+            let mut newly = TopicPartitionList::new();
+            for (&p, &end) in &ends {
+                if positions.get(&p).copied().unwrap_or(0) >= end && finished.insert(p) {
+                    newly.add_partition(&req.topic, p);
+                }
+            }
+            if newly.count() > 0 {
+                consumer.pause(&newly).map_err(|e| e.to_string())?;
+            }
+            if last_progress.elapsed() > Duration::from_secs(30) {
+                return Err("Snapshot made no progress for 30 seconds; connection or retention may have changed".into());
+            }
+        }
+    }
+    Ok(format!("Snapshot complete · {fetched} fetched"))
+}
+
+fn demo(req: &Request, tx: &Sender<Event>, ctl: &Control) -> Result<String, String> {
+    let selected = if req.partitions.is_empty() {
+        vec![0, 1, 2]
+    } else {
+        req.partitions.clone()
+    };
+    if selected.iter().any(|p| !(0..3).contains(p)) {
+        return Err("Offline demo has partitions 0, 1 and 2".into());
+    }
+    let bounds: Vec<_> = selected
+        .iter()
+        .map(|p| Partition {
+            partition: *p,
+            beginning: 0,
+            end: 300,
+        })
+        .collect();
+    emit(tx, ctl, Event::Metadata(bounds));
+    if req.inspect {
+        return Ok("Offline synthetic demo".into());
+    }
+    let epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+        - 300000;
+    let timestamp_offset = if req.mode == Mode::Timestamp {
+        Some((req.value.saturating_sub(epoch).saturating_add(999) / 1000).clamp(0, 300))
+    } else {
+        None
+    };
+    let start = start_offset(req.mode, req.value, 0, 300, timestamp_offset)?;
+    let mut positions: BTreeMap<i32, i64> = selected.into_iter().map(|p| (p, start)).collect();
+    let mut count = 0;
+    let mut active = Duration::ZERO;
+    let mut previous = Instant::now();
+    let mut was_paused = false;
+    state(
+        tx,
+        ctl,
+        "READING",
+        "Offline demo · synthetic messages · no broker connection",
+    );
+    loop {
+        if ctl.stop.load(Ordering::Acquire) {
+            break;
+        }
+        if !req.follow && positions.values().all(|p| *p >= 300) {
+            break;
+        }
+        let now = Instant::now();
+        let delta = now - previous;
+        previous = now;
+        if ctl.pause.load(Ordering::Acquire) {
+            if !was_paused {
+                state(tx, ctl, "PAUSED", "Offline demo paused");
+                was_paused = true;
+            }
+            thread::sleep(Duration::from_millis(40));
+            continue;
+        }
+        if was_paused {
+            state(tx, ctl, "READING", "Offline demo resumed");
+            was_paused = false;
+        }
+        active += delta;
+        if req.seconds > 0 && active >= Duration::from_secs(req.seconds) {
+            break;
+        }
+        for _ in 0..3 {
+            for (p, offset) in positions.iter_mut() {
+                if !req.follow && *offset >= 300 {
+                    continue;
+                }
+                if req.max_records > 0 && count >= req.max_records {
+                    return Ok(format!("Demo record limit · {count} synthetic records"));
+                }
+                let record = demo_record(*p, *offset, &req.topic, epoch);
+                *offset += 1;
+                count += 1;
+                if !emit(tx, ctl, Event::Record(Arc::new(record))) {
+                    return Ok("Stopped".into());
+                }
+            }
+        }
+        emit(tx, ctl, Event::Progress(count));
+        thread::sleep(Duration::from_millis(60));
+    }
+    Ok(format!("Demo complete · {count} synthetic records"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn readonly_cannot_be_overridden() {
+        let p=parse_properties("group.id=production\nenable.auto.commit=true\nenable.auto.offset.store=true\nallow.auto.create.topics=true\nplugin.library.paths=evil.so").unwrap();
+        let s = safe_properties(&p);
+        assert!(!s.contains_key("group.id"));
+        for k in [
+            "enable.auto.commit",
+            "enable.auto.offset.store",
+            "allow.auto.create.topics",
+        ] {
+            assert_eq!(s[k], "false");
+        }
+        assert!(!s.contains_key("plugin.library.paths"));
+    }
+    #[test]
+    fn offline_read_honors_limit() {
+        let req = Request {
+            props: Properties::new(),
+            topic: "demo".into(),
+            partitions: vec![0],
+            mode: Mode::Earliest,
+            value: 0,
+            follow: false,
+            max_records: 7,
+            seconds: 5,
+            demo: true,
+            inspect: false,
+        };
+        let s = Session::start(req);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut count = 0;
+        while s.running() || !s.rx.is_empty() {
+            if let Some(Event::Record(_)) = s.try_next() {
+                count += 1;
+            } else {
+                thread::sleep(Duration::from_millis(5));
+            }
+            assert!(Instant::now() < deadline);
+        }
+        assert_eq!(count, 7);
+    }
+    #[test]
+    fn stop_unblocks_a_full_channel() {
+        let req = Request {
+            props: Properties::new(),
+            topic: "demo".into(),
+            partitions: vec![],
+            mode: Mode::Latest,
+            value: 0,
+            follow: true,
+            max_records: 0,
+            seconds: 30,
+            demo: true,
+            inspect: false,
+        };
+        let s = Session::start(req);
+        thread::sleep(Duration::from_millis(100));
+        s.stop();
+        let until = Instant::now() + Duration::from_secs(2);
+        while s.running() {
+            thread::sleep(Duration::from_millis(10));
+            assert!(Instant::now() < until);
+        }
+    }
+}

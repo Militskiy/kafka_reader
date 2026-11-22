@@ -1,0 +1,12 @@
+{
+  "appVersion": "0.3.0",
+  "checks": 15,
+  "credentialsRestored": false,
+  "guiReopen": "PASS",
+  "offlineServersRestored": 0,
+  "realServersRestored": 1,
+  "recordsRestored": 0,
+  "sessionStarted": false,
+  "executableSha256": "dc729010c4744f83c04b1c4ee245f6fd858287ab4e0b3a6f54b57dfa1334af1c",
+  "completedAtUtc": "2026-11-22T13:05:16.711486+00:00"
+}

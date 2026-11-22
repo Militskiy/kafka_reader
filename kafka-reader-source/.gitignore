@@ -1,0 +1,7 @@
+/target/
+/dist/
+/native/
+/.inspection/
+*.jsonl
+*.log
+kafka-rust-profile.properties

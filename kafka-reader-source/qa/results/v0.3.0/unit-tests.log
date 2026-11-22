@@ -1,0 +1,53 @@
+   Compiling kafka-reader-rust v0.3.0 (/workspace/scratch/c24b0abd31b0/kafka-reader-rust)
+    Finished `release` profile [optimized] target(s) in 9.97s
+     Running unittests src/lib.rs (target/release/build/kafka-reader-rust/6e9f1e4166d294e9/out/kafka_reader_rust-6e9f1e4166d294e9)
+
+running 22 tests
+test model::tests::json_preserves_null_empty_binary_headers ... ok
+test model::tests::configured_retention_is_enforced_immediately ... ok
+test model::tests::malformed_json_does_not_panic ... ok
+test model::tests::profiles_remove_credentials ... ok
+test model::tests::offsets_reject_outside_bounds ... ok
+test model::tests::recent_clamps_and_timestamp_never_rewinds ... ok
+test model::tests::unicode_preview_and_binary ... ok
+test reader::tests::readonly_cannot_be_overridden ... ok
+test workspace::tests::draft_cancel_does_not_mutate_original ... ok
+test workspace::tests::invalid_save_does_not_replace_valid_file ... ok
+test workspace::tests::secrets_never_reach_disk_and_workspace_roundtrips ... ok
+test workspace::tests::legacy_sample_is_removed_without_changing_real_servers_or_preferences ... ok
+test workspace::tests::settings_validate_actual_resource_bounds ... ok
+test workspace::tests::tabs_are_functional_and_reader_guard_is_contextual ... ok
+test workspace::tests::sample_only_workspace_becomes_empty_and_qa_sample_never_persists ... ok
+test workspace::tests::malformed_workspace_is_reported_without_overwrite ... ok
+test workspace::tests::a_new_workspace_is_empty_and_can_be_saved ... ok
+test workspace::tests::real_server_with_a_sample_name_is_preserved ... ok
+test workspace::tests::topics_deduplicate_and_favorites_persist ... ok
+test model::tests::retained_count_bound ... ok
+test reader::tests::offline_read_honors_limit ... ok
+test reader::tests::stop_unblocks_a_full_channel ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running unittests src/main.rs (target/release/build/kafka-reader-rust/22d0a343ec39fda7/out/kafka_reader_rust-22d0a343ec39fda7)
+
+running 11 tests
+test app::presentation::tests::binary_requires_explicit_hex_and_null_key_is_not_a_tombstone ... ok
+test app::presentation::tests::equal_times_have_a_repeatable_partition_and_offset_order ... ok
+test app::view_tests::credentials_never_cross_server_ids ... ok
+test app::presentation::tests::auto_format_shows_json_or_text_without_a_second_hex_copy ... ok
+test app::dialogs::tests::imported_profile_remains_a_draft_until_save ... ok
+test app::presentation::tests::partition_order_keeps_offsets_ascending_within_each_partition ... ok
+test app::presentation::tests::time_order_uses_full_timestamp_and_keeps_missing_last ... ok
+test app::presentation::tests::offsets_are_numeric_with_partition_ties_and_no_overflow ... ok
+test app::dialogs::tests::typed_auth_tls_and_advanced_produce_native_settings ... ok
+test app::view_tests::late_preview_is_scoped_to_topic_and_generation ... ok
+test app::view_tests::sorting_filtered_rows_preserves_retention_order_and_selection ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests kafka_reader_rust
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,85 @@
+# Shared Kafka integration fixture
+
+This fixture verifies the C# and Rust prototypes against the same real Apache Kafka 4.1.2 broker. It uses a disposable single-node KRaft broker with an administrative localhost listener and a SASL/PLAIN localhost listener for a restricted topic-only reader.
+
+The mutation operations in `FixtureHost.java` create test topics, ACLs, synthetic messages and fixture group offsets. They are test setup only and are not compiled into either desktop application.
+
+## Requirements
+
+- Java/JDK 21 or later, Maven 3.9 or later and Python 3.
+- The prototype executable built for the machine on which you run these checks.
+- Local ports 19092, 19093 and 19094 free.
+- Network access for the initial Maven dependency download.
+
+From this directory:
+
+```bash
+mvn dependency:build-classpath -Dmdep.outputFile=broker-classpath.txt
+python3 run-integration.py --app csharp --exe /absolute/path/to/KafkaReader
+python3 run-integration.py --app rust --exe /absolute/path/to/kafka-reader-rust
+```
+
+Run the two test invocations sequentially: each replaces this fixture's generated `work/broker-data` directory. This directory is not a production Kafka data directory. Do not repoint it at an existing broker's storage.
+
+The wrapper starts and stops the broker and fixture helper, invokes the prototype's actual headless reader entry point, and checks the exported JSONL bytes and broker state. It leaves logs, JSONL exports and an `integration-report.json` beneath `work/<language>/`.
+
+The fixture credentials are intentional dummy values used only on the local test listener. Application profiles must use native librdkafka properties (`sasl.username`, `sasl.password`, TLS PEM/CA paths), not the Java client's `sasl.jaas.config` or JKS truststore settings.
+
+## Coverage
+
+Twenty checks exercise exact-topic metadata, finite snapshots, recent windows, partition selection, explicit offsets, timestamps, exact record caps, late arrivals, following, null/empty/binary data, duplicate headers, Unicode export, restricted SASL access, denied group commits, authentication/authorization failures, unchanged existing group offsets, no newly created groups, aborted transactions, offset gaps and an open transaction's last stable offset.
+
+The reader must emit `READING` on stderr after capturing end offsets so the fixture can coordinate a later arrival. Results go to stdout as a JSON summary; records go to the explicitly supplied export file.
+
+This fixture does not measure throughput or prove Windows execution when it is run on Linux. The separate GUI checks exercise the actual native desktop windows under a real display or Xvfb. See the prototype's test report for results that were actually executed.
+
+## Independent native GUI observer (v0.2.0)
+
+`run-gui-v02.py` runs the application's synthetic GUI checks and then launches a separate process against the same isolated data directory to verify restart restoration. It enumerates real X11 top-level windows, captures their framebuffer, checks that server configuration and App Settings use separate native windows, and scans saved files for the known fake-secret sentinels. It does not need a Kafka broker.
+
+Dependencies on the Linux test host:
+
+- Python 3 and Pillow with X11/XCB screenshot support.
+- Xvfb, `xauth`, and `xwininfo` available on `PATH`, or an explicit Xvfb path.
+- The application's normal Linux desktop dependencies; the Rust build also needs an OpenGL-capable Mesa/X11 runtime for software rendering.
+
+On Debian/Ubuntu, the observer-specific packages are `xvfb`, `xauth`, `x11-utils`, and `python3-pil`. Pillow can alternatively be installed in a Python virtual environment. No SDK or toolchain environment script is required to run an already-built application.
+
+From the project root, supply a newly named output directory that does not already exist:
+
+```bash
+python3 qa/integration/run-gui-v02.py \
+  --kind rust \
+  --exe ./target/release/kafka-reader-rust \
+  --output /tmp/kafka-reader-rust-gui-v02-new-run \
+  --xvfb /usr/bin/Xvfb
+```
+
+`--exe` also accepts an absolute path. `--xvfb` is optional when Xvfb is discoverable on `PATH`; `KAFKA_READER_XVFB` is another optional override. Omit `--output` to create a unique timestamped directory under the observer's `work-v0.2.0` folder. `--timeout` changes the default 180-second limit per application process.
+
+The observer launches a temporary TCP X11 display on `127.0.0.1:99`, protected by a random xauth cookie, and stops it when finished. Run observers sequentially on a normal host and keep display 99 / TCP port 6099 free. The app receives `--data-dir` pointing inside the fresh output directory, so the checks do not use the user's saved workspace.
+
+Results include `observer-report.json`, separate smoke/reopen logs, actual native screenshots, and the sanitized persisted workspace. A successful exit means the automated assertions passed; screenshots still need visual review for layout and readability. These Linux checks and the separate PE import reports do not claim Windows runtime execution.
+
+
+## Native GUI observer for Kafka Reader 0.3.0
+
+`run-gui-v03.py` additionally starts a clean normal application and captures its
+empty server list. The synthetic server exists only during explicit GUI QA; the
+saved workspace and fresh-process reopen must contain only the manually-created
+real server profile. The in-app checks exercise numeric Time, Partition and
+Offset sorting in both directions, retained-record selection, per-tab sort
+state, and explicit Key Hex formatting without a redundant Hex tab.
+
+```bash
+python3 qa/integration/run-gui-v03.py \
+  --exe ./target/release/kafka-reader-rust \
+  --output /tmp/kafka-reader-gui-v03-new-run \
+  --xvfb /usr/bin/Xvfb
+```
+
+The dependencies and isolated X11 setup are the same as the v0.2 observer above.
+No production server is contacted. The QA data contains a localhost profile with
+synthetic credentials; it is saved without those credentials and is never read.
+The v0.2 report directories are historical evidence. New executed results belong
+under `qa/results/v0.3.0/`.

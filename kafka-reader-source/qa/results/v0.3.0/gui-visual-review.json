@@ -1,0 +1,29 @@
+{
+  "appVersion": "0.3.0",
+  "status": "PASS",
+  "executableSha256": "dc729010c4744f83c04b1c4ee245f6fd858287ab4e0b3a6f54b57dfa1334af1c",
+  "completedAtUtc": "2026-11-22T13:05:16.711486+00:00",
+  "reviewedScreenshots": [
+    "docs/screenshots/v0.3.0/kafka-reader-empty.png",
+    "docs/screenshots/v0.3.0/kafka-reader-messages.png",
+    "docs/screenshots/v0.3.0/kafka-reader-compact.png",
+    "docs/screenshots/v0.3.0/kafka-reader-key-text.png",
+    "docs/screenshots/v0.3.0/kafka-reader-key-hex.png",
+    "docs/screenshots/v0.3.0/kafka-reader-reopened.png"
+  ],
+  "checks": {
+    "cleanStartupHasNoDemoServer": true,
+    "visibleBrandAndVersionAreKafkaReader030": true,
+    "emptyStartupOffersAddServer": true,
+    "partitionAndOffsetColumnsSeparateAndAligned": true,
+    "timeDirectionTriangleVisibleWithoutMissingGlyph": true,
+    "autoScrollControlAbsent": true,
+    "inspectorOnlyValueKeyHeadersMetadata": true,
+    "keyAutoShowsTextOnly": true,
+    "keyHexIsExplicitFormatSelection": true,
+    "compactToolbarFitsAt1050x720": true,
+    "reopenContainsOnlyRealSavedProfileAndNoMessages": true
+  },
+  "dataNotice": "Populated captures use the synthetic fixture available only through the explicit GUI QA mode. A normal fresh launch has no servers; restart captures show only the manually saved localhost test profile. No production data or credentials are shown.",
+  "limits": "Visual review and internal action hooks are not full OS-level mouse/keyboard, clipboard, accessibility or Windows acceptance tests."
+}

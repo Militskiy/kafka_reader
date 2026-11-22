@@ -1,0 +1,27 @@
+{
+  "version": "0.3.0",
+  "priorSourceArchiveSha256": "0be93f487dfb3016e2113255b7427b80cb8f90b9e6c2499e17a8f385932bf445",
+  "unchangedCoreFiles": [
+    {
+      "file": "src/reader.rs",
+      "unchangedFrom": "0.2.0",
+      "sha256": "c3b833c1b756b78ac62a711becf8670d5b4dc1cc3f32f3bfb48378f00aca1677"
+    },
+    {
+      "file": "src/direct_consumer.rs",
+      "unchangedFrom": "0.2.0",
+      "sha256": "a96e7958e201b2bad115d5df168aae2baf9f01b49ec0c512610416e401245eba"
+    },
+    {
+      "file": "src/lib.rs",
+      "unchangedFrom": "0.2.0",
+      "sha256": "fcaa2b30e51112deebcddeb0a00454b27a22530611f9815a1a5ee932416ecde8"
+    },
+    {
+      "file": "src/app/dialogs.rs",
+      "unchangedFrom": "0.2.0",
+      "sha256": "8086e0952dc49577fd0547adb85c66bfb12d29eb0e38fbaa9b82b0089d64d89e"
+    }
+  ],
+  "scope": "User-interface sorting and inspector, workspace sample migration, branding and packaging. No Kafka protocol or native consumer change. Live-broker suite was not rerun for this UI-focused release."
+}
