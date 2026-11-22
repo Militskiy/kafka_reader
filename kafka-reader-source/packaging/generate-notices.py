@@ -21,7 +21,7 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     packages = {}
     for metadata in args.metadata:
-        for package in json.loads(Path(metadata).read_text())["packages"]:
+        for package in json.loads(Path(metadata).read_text(encoding="utf-8-sig"))["packages"]:
             if package["name"] != "kafka-reader-rust":
                 packages[package["id"]] = package
     entries = []
@@ -45,7 +45,7 @@ def main():
             destination = output / "cargo" / key / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, destination)
-            files.append(str(destination.relative_to(output)))
+            files.append(destination.relative_to(output).as_posix())
         shared = {
             "accesskit": "accesskit", "gl_generator": "gl-rs", "khronos_api": "gl-rs",
             "profiling": "profiling", "ecolor": "egui", "eframe": "egui", "egui": "egui",
@@ -53,7 +53,7 @@ def main():
             "emath": "egui", "epaint": "egui",
         }.get(package["name"])
         if not files and shared:
-            files = [str(p.relative_to(output)) for p in (output / "upstream" / shared).glob("LICENSE*")]
+            files = [p.relative_to(output).as_posix() for p in (output / "upstream" / shared).glob("LICENSE*")]
         entries.append({
             "name": package["name"], "version": package["version"],
             "license": package.get("license"), "repository": package.get("repository"),

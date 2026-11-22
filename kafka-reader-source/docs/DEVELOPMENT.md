@@ -193,6 +193,21 @@ last stable offsets. They do not establish live TLS/mTLS/SCRAM coverage.
 
 ## Package the source or release
 
+All ZIPs include the Cargo dependency notices for both supported targets.
+Put Cargo on `PATH` when running the Python packager. It resolves both graphs
+with `cargo metadata --locked` and writes the files listed in
+[`dependency-inventory.json`](../THIRD-PARTY/dependency-inventory.json) directly
+from the crate sources into each ZIP. The first run can download crates.
+To prepare an offline packaging host, populate its cache while online:
+
+```bash
+cargo fetch --locked --target x86_64-unknown-linux-gnu --target x86_64-pc-windows-gnu
+```
+
+Set `CARGO_NET_OFFLINE=true` to package from that cache. Packaging needs
+the sources for both targets even when building a source-only ZIP. See
+[Third-party notices](../THIRD-PARTY-NOTICES.md) when changing dependencies.
+
 For source-only packaging, including the Codex handoff documents:
 
 ```bash

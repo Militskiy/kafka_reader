@@ -1,4 +1,5 @@
 /work/
+/work-v*/
 /broker-classpath.txt
 /tools-private/
 __pycache__/

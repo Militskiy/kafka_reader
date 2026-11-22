@@ -385,9 +385,10 @@ cargo build --locked --release
 target/release/kafka-reader-rust --self-test
 ```
 
-App code is MIT licensed. Dependency license texts, the locked license inventory
-and native redistribution notices are in `THIRD-PARTY/` and
-`THIRD-PARTY-NOTICES.md`.
+App code is MIT licensed. Every distribution ZIP includes the dependency license
+texts and native redistribution notices under `THIRD-PARTY/`. The checkout
+contains the inventory and instructions for collecting the original texts.
+See [Third-party notices](THIRD-PARTY-NOTICES.md).
 
 ## Primary project references
 

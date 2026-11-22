@@ -12,8 +12,10 @@ such as `MIT OR Apache-2.0` do not require choosing every alternative.
 build dependencies and optional entries that need not all be linked into the
 delivered executable. `Cargo.lock` is the authoritative version lockfile.
 
-Original license texts copied from the published crate archives are under
-`THIRD-PARTY/cargo/`. Some upstream workspaces do not include a license file in
+Every distribution ZIP contains the original crate license texts under
+`THIRD-PARTY/cargo/`. Packaging reads those files from Cargo's locked crate
+sources using the reviewed inventory. Git tracks the inventory and the shared
+upstream, Rust and MinGW notices. Some upstream workspaces do not include a license file in
 each published member crate. Their original shared license texts are retained
 under `THIRD-PARTY/upstream/`, with the exact upstream commit URLs in
 `THIRD-PARTY/upstream/ORIGINS.json`. These cover the egui workspace, AccessKit,
@@ -60,8 +62,12 @@ the Windows ZIP together with this documentation and the complete license set.
 
 ## Regenerating the inventory
 
-Run Cargo metadata with the locked Linux and Windows targets, then use
-`packaging/generate-notices.py metadata-linux.json metadata-windows.json`.
+When dependencies change, run `cargo metadata --locked --format-version 1`
+with `--filter-platform x86_64-unknown-linux-gnu` and again with
+`--filter-platform x86_64-pc-windows-gnu`. Save each UTF-8 JSON result, then
+run `python packaging/generate-notices.py metadata-linux.json metadata-windows.json`
+from the source root. Review the updated inventory and any shared upstream
+licenses. Local generated copies under `THIRD-PARTY/cargo/` are ignored.
 Original upstream workspace notices are already retained in this source bundle.
 The optional `--rust-doc` argument accepts the Rust distribution's documentation
 directory to copy its standard-library attribution.

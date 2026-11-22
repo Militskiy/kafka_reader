@@ -9,6 +9,8 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+from cargo_notices import notice_files
+
 ROOT = Path(__file__).resolve().parent.parent
 COMMON = ["README.md", "QUICKSTART.md", "CHANGELOG.md", "TEST-REPORT.md", "LICENSE",
           "THIRD-PARTY-NOTICES.md", "THIRD-PARTY", "examples", "docs/screenshots/v0.3.0", "qa/results/v0.3.0"]
@@ -28,6 +30,12 @@ def add_tree(archive, relative, prefix):
     path = ROOT / relative
     if not path.exists():
         raise SystemExit(f"Required deliverable is missing: {relative}")
+    if relative == "THIRD-PARTY":
+        # An extracted source ZIP or older checkout can already contain generated copies.
+        for child in sorted(path.iterdir()):
+            if child.name != "cargo":
+                add_tree(archive, child.relative_to(ROOT).as_posix(), prefix)
+        return
     entries = sorted(path.rglob("*")) if path.is_dir() else [path]
     for file in entries:
         relative_parts = file.relative_to(ROOT).parts
@@ -49,19 +57,24 @@ def executable(archive, file, path):
 
 
 def create_archives(directory, linux_exe, windows_exe):
-    source = directory / "kafka-reader-source.zip"
-    with zipfile.ZipFile(source, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-        for entry in SOURCE:
-            add_tree(archive, entry, "kafka-reader-source")
-    for platform, binary in [("linux-x64", linux_exe), ("windows-x64", windows_exe)]:
-        if binary is None:
-            continue
+    notices = notice_files(ROOT)
+    editions = [("source", SOURCE, None)]
+    if linux_exe is not None:
+        editions.append(("linux-x64", COMMON, linux_exe))
+    if windows_exe is not None:
+        editions.append(("windows-x64", COMMON, windows_exe))
+    for platform, entries, binary in editions:
         destination = directory / f"kafka-reader-{platform}.zip"
         prefix = f"kafka-reader-{platform}"
-        with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-            for entry in COMMON:
+        # Cargo registry files can have normalized timestamps earlier than ZIP's 1980 minimum.
+        with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED,
+                             compresslevel=9, strict_timestamps=False) as archive:
+            for entry in entries:
                 add_tree(archive, entry, prefix)
-            executable(archive, binary, f"{prefix}/{'kafka-reader.exe' if platform == 'windows-x64' else 'kafka-reader'}")
+            for member, original in sorted(notices.items()):
+                archive.write(original, f"{prefix}/THIRD-PARTY/{member}")
+            if binary is not None:
+                executable(archive, binary, f"{prefix}/{'kafka-reader.exe' if platform == 'windows-x64' else 'kafka-reader'}")
     if windows_exe is not None:
         shutil.copyfile(windows_exe, directory / "kafka-reader.exe")
 
