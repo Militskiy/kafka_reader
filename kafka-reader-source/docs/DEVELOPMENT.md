@@ -215,11 +215,31 @@ platform builds produced by earlier invocations. Run packaging commands
 sequentially for a given output directory. Verify ZIP CRCs and compare packaged
 binaries with the hashes in the corresponding test reports.
 
-When making a new software release, update Cargo.toml/Cargo.lock, versioned
-paths in the build/package scripts, documentation, the changelog, screenshots,
-reports and checksums together. `--out` alone does not update the versioned
-evidence allowlist. Source/documentation repackaging can keep the app version
-when application code has not changed; record that distinction.
+## Release versioning
+
+Assign a new `MAJOR.MINOR.PATCH` version to each application release. Use a
+patch bump for fixes and a minor bump for new features. From `0.3.0`, a
+fix-only release is `0.3.1`, and a release that includes the new Russian
+interface is `0.4.0`. For incompatible changes during `0.x`, increment the
+minor version and explain the migration in the changelog. From `1.0.0`
+onward, use a major bump for incompatible changes.
+
+1. Set the package version in [Cargo.toml](../Cargo.toml) and update its entry
+   in [Cargo.lock](../Cargo.lock). Move the entries being shipped from
+   **Unreleased** into a dated section in the [changelog](../CHANGELOG.md).
+2. Update the build scripts, package output and evidence paths for the new
+   version. Build and test the release. Check that the packaged executable's
+   `--version`, the `dist/vX.Y.Z/` directory and the test report agree.
+   Verify the asset hashes against `SHA256SUMS.txt`.
+3. Commit the release as `Release vX.Y.Z` and tag that commit with an annotated
+   `vX.Y.Z` tag. When publishing to GitHub, push the commit and tag, then
+   create the GitHub Release from that tag. Attach the verified executable,
+   available platform ZIPs, source ZIP and checksum file. Confirm the published
+   tag points to the release commit and the uploaded assets match the manifest.
+
+Keep a published tag and its artifacts tied to that build. Ship subsequent
+application changes under the next version. Documentation-only work can keep
+the current application version.
 
 Do not overwrite old evidence with new claims. Retain the exact binary hashes
 and distinguish compilation, unit checks, GUI execution, broker execution and

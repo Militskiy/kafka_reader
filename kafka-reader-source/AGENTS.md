@@ -5,7 +5,7 @@
 This repository contains the native **Kafka Reader** desktop application and
 its headless CLI. It lets a user inspect an exact Kafka topic with broker/topic
 access, even without a Kafka web UI or consumer-group permissions. The current
-application version is **0.3.0**. This is the Rust implementation; earlier Java
+application version is in [Cargo.toml](Cargo.toml). This is the Rust implementation; earlier Java
 and C# prototypes are separate projects.
 
 Treat the user's current task as the work to perform. Preserve the decisions
@@ -97,8 +97,10 @@ test merely to get a green result. Report unavailable checks precisely.
 
 Update the relevant project notes when behavior, commands, or decisions change.
 Keep `AGENTS.md` concise and put detailed context in the linked documents.
-For releases, update versioned packaging paths, the changelog, evidence, and
-checksums together. The source archive uses an explicit allowlist in
+For each new application release, increment the version before building. Follow
+[Release versioning](docs/DEVELOPMENT.md#release-versioning) to choose the bump,
+commit the release, and publish its matching tag and assets on GitHub.
+The source archive uses an explicit allowlist in
 `packaging/package.py`; ensure new guidance files remain included.
 
 Summarize what changed, why, checks actually run, and remaining limitations.
