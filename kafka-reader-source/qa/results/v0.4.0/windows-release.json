@@ -1,0 +1,70 @@
+{
+  "version": "0.4.0",
+  "date": "2026-11-22",
+  "platform": "Windows-11-10.0.26300-SP0",
+  "target": "x86_64-pc-windows-gnu",
+  "rustc": "1.100.0",
+  "cargo": "1.100.0",
+  "mingw_gcc": "16.2.0",
+  "binary_sha256": "a109416bf2788076aee64de8527ad59dc7c5baf33b1e8716c1f5f73e6c719d1d",
+  "version_output": "Kafka Reader 0.4.0 · native binary · librdkafka 2.16.0",
+  "authenticode": {
+    "subject": "CN=Alexey Militskiy",
+    "issuer": "CN=Alexey Militskiy",
+    "self_signed": true,
+    "certificate_der_sha256": "a1ea11a7b00d1303a2deb143549a02642dabe945d4db9b4e518f0544f63f8572",
+    "thumbprint_sha1": "44644A7303E549066BF4F8004E708E0473251AFB",
+    "authenticode_digest_sha256": "fcbbec76e5553f53a4956cd5c6422e6f36cb6e65de8cb2ac1374a5363b778df9",
+    "timestamp": {
+      "type": "RFC 3161",
+      "hash": "SHA256",
+      "utc": "2026-11-22T20:22:21Z",
+      "responder": "DigiCert SHA256 RSA4096 Timestamp Responder 2026 1"
+    },
+    "osslsigncode_2_16": "Signature and timestamp verified with the publisher certificate pinned and public CA roots for timestamp verification.",
+    "windows_default_trust": "UntrustedRoot"
+  },
+  "cargo_fmt": "PASS",
+  "release_tests": {
+    "library_passed": 34,
+    "application_passed": 18,
+    "failed": 0
+  },
+  "system_path_only_self_test": {
+    "checks": 9,
+    "librdkafka": "2.16.0",
+    "selfTest": "PASS"
+  },
+  "gui_smoke": {
+    "appVersion": "0.4.0",
+    "checks": 49,
+    "guiSmoke": "PASS",
+    "nativeChildViewport": true,
+    "openTabs": 4,
+    "retained": 120
+  },
+  "gui_reopen": {
+    "appVersion": "0.4.0",
+    "checks": 17,
+    "credentialsRestored": false,
+    "guiReopen": "PASS",
+    "language": "russian",
+    "offlineServersRestored": 0,
+    "realServersRestored": 1,
+    "recordsRestored": 0,
+    "sessionStarted": false
+  },
+  "pe_imports": "Windows system DLLs only",
+  "kafka_fixture": {
+    "passed": 20,
+    "report": "kafka-integration.json"
+  },
+  "sondahub_bridge": {
+    "bounds_partitions": 6,
+    "records_read": 1,
+    "port": 9192,
+    "stopped_and_port_free": true
+  },
+  "packaging_unit_tests_passed": 3,
+  "fixture_isolation_tests_passed": 4
+}

@@ -21,7 +21,7 @@ python3 run-integration.py --app rust --exe /absolute/path/to/kafka-reader-rust
 
 On Windows, set `JAVA_HOME` to a JDK 21+ installation. From this directory,
 run `mvn.cmd dependency:build-classpath "-Dmdep.outputFile=broker-classpath.txt"`,
-then `python run-integration.py --app rust --exe ..\..\dist\v0.3.0\kafka-reader.exe`.
+then `python run-integration.py --app rust --exe ..\..\dist\v0.4.0\kafka-reader.exe`.
 
 Each invocation creates a new directory under `work/run-*` and prints its
 path. It formats temporary broker storage with a random cluster ID and
@@ -40,7 +40,7 @@ From the project root, supply the built executable, the path to your copy of
 `sondahub-bridge.mjs`, and an exact topic containing at least one readable record.
 
 ```powershell
-python qa/integration/run-bridge-check.py --exe .\dist\v0.3.0\kafka-reader.exe --bridge-script "$env:USERPROFILE\sondahub-bridge.mjs" --topic fleet.telemetry
+python qa/integration/run-bridge-check.py --exe .\dist\v0.4.0\kafka-reader.exe --bridge-script "$env:USERPROFILE\sondahub-bridge.mjs" --topic fleet.telemetry
 ```
 
 The check uses `npx.cmd --yes --package=node@22` to locate Node 22, starts the
@@ -92,7 +92,7 @@ The observer launches a temporary TCP X11 display on `127.0.0.1:99`, protected b
 Results include `observer-report.json`, separate smoke/reopen logs, actual native screenshots, and the sanitized persisted workspace. A successful exit means the automated assertions passed; screenshots still need visual review for layout and readability. These Linux checks and the separate PE import reports do not claim Windows runtime execution.
 
 
-## Native GUI observer for Kafka Reader 0.3.0
+## Current native GUI observer
 
 `run-gui-v03.py` additionally starts a clean normal application and captures its
 empty server list. The synthetic server exists only during explicit GUI QA; the
@@ -111,5 +111,6 @@ python3 qa/integration/run-gui-v03.py \
 The dependencies and isolated X11 setup are the same as the v0.2 observer above.
 No production server is contacted. The QA data contains a localhost profile with
 synthetic credentials; it is saved without those credentials and is never read.
-The v0.2 report directories are historical evidence. New executed results belong
-under `qa/results/v0.3.0/`.
+The observer records the version from the tested executable's `--version`
+output. By default it creates a new run under `work-vX.Y.Z/` for that version.
+Keep release evidence in the matching `qa/results/vX.Y.Z/` directory.

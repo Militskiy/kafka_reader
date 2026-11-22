@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 22 November 2026
 
+- Signed the Windows executable with Alexey Militskiy's self-signed Authenticode
+  certificate and a DigiCert timestamp. The Windows ZIP includes the same signed EXE.
 - Added a Russian desktop interface. App settings can follow the system display
   language or save an explicit English or Russian preference.
-
 - Isolated GUI smoke workspaces and broker integration fixtures from existing user data.
 - Required broker Metadata v4 to protect exact-topic lookups from automatic topic creation.
 - Preserved terminal read outcomes and skipped counts under backpressure, and
@@ -14,6 +15,8 @@
 - Rejected a new server draft before saving if its first tab exceeds the tab limit.
 - Applied the default SASL/PLAIN mechanism to the native client.
 - Corrected checkout instructions, source archive contents, and release checksum coverage.
+- Moved collection of Cargo license texts into packaging. Each distribution ZIP
+  includes the original notices from the locked crate sources.
 
 ## 0.3.0 — 22 November 2026
 

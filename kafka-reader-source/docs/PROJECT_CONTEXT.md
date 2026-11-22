@@ -1,6 +1,6 @@
 # Project context and current state
 
-Snapshot: **22 November 2026**, application **0.3.0**. This is the durable
+Snapshot: **22 November 2026**, application **0.4.0**. This is the durable
 handoff for future development. Read the current code when making changes;
 update this document when an accepted decision or verified capability changes.
 
@@ -66,6 +66,11 @@ Version 0.2.0 introduced the Bruno-inspired workspace, independent configuration
 windows, persistence, topic caches and a genuine static Windows EXE.
 Version 0.3.0 removed the normal demo, removed Rust branding, replaced
 auto-scroll with numeric column sorting and simplified the inspector.
+Version 0.4.0 added the Russian interface and system language detection,
+protected concurrent workspace saves and fixed several exact-topic read and
+export edge cases. Its Windows executable carries Alexey Militskiy's self-signed
+Authenticode certificate with a DigiCert timestamp. See the
+[changelog](../CHANGELOG.md) and [signature details](../QUICKSTART.md#verify-the-windows-download).
 
 Old sample profiles are removed using their `offline` marker when a saved
 workspace is loaded. The cleaned state reaches disk on the next normal save.
@@ -79,6 +84,8 @@ They are layout references, not a request to put a demo server back into normal
 startup. The empty/reopened screenshots show ordinary behavior.
 
 ## Verification baseline and limits
+
+For version 0.4.0, consult the [release test report](../TEST-REPORT.md).
 
 The delivered 0.3.0 release has recorded results for **33 unit tests, 9
 self-checks, 47 GUI assertions, 15 reopen assertions and 12 independent
@@ -110,7 +117,7 @@ Other current limits:
 - Live TLS, mTLS and SCRAM broker configurations have not been verified.
 - No Schema Registry integration, Avro/Protobuf schema decoding, OAuth or
   Kerberos support is implemented.
-- No credential vault/keychain persistence, updater, signing or installer.
+- No credential vault/keychain persistence, updater or installer.
 - No macOS/ARM release, broad accessibility/high-DPI certification, or prolonged
   throughput/memory-soak acceptance test.
 - Native GUI checks use application hooks plus independent window, framebuffer

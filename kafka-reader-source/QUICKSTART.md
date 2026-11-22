@@ -1,4 +1,4 @@
-# Kafka Reader 0.3.0 — quick start
+# Kafka Reader 0.4.0 — quick start
 
 ## Launch
 
@@ -6,19 +6,33 @@
 executable with Kafka, TLS and compression code linked into it. No companion
 library DLLs, Java, .NET, browser or installer are required. The ZIP contains
 optional documentation, example profiles and dependency notices alongside it.
-The original Windows release is unsigned and was cross-compiled. The Windows
-build with the review fixes passed native desktop smoke and reopen checks
-as well as headless reads. See the
-[Windows host results](qa/results/v0.3.0/windows-review-fixes-2026-11-22.json).
 
-**Linux x64:** extract the Linux ZIP and run `./kafka-reader`. If your
-extractor dropped executable permissions, use `chmod +x kafka-reader`.
-An X11/XWayland desktop and working OpenGL driver are required. The supplied
-release was executed on Debian 13 with Mesa.
+**Linux x64:** follow the [Linux build instructions](README.md#linux-x64),
+then run `./target/release/kafka-reader-rust` in an X11/XWayland session with
+a working OpenGL driver.
 
 First launch starts with an empty workspace. Use **+ Add server** to add your
 connection. Existing real connections and preferences restore automatically;
 the built-in demo server is removed when an older workspace is loaded.
+
+## Verify the Windows download
+
+The standalone EXE and the copy in the Windows ZIP are both signed by
+**Alexey Militskiy** and timestamped by DigiCert. The publisher certificate is
+self-signed, so Windows does not trust it by default. To inspect your copy
+in PowerShell, run:
+
+```powershell
+$signature = Get-AuthenticodeSignature -LiteralPath .\kafka-reader.exe
+$signature.SignerCertificate | Select-Object Subject, Thumbprint
+$signature.StatusMessage
+Get-FileHash -Algorithm SHA256 -LiteralPath .\kafka-reader.exe
+```
+
+For 0.4.0 the certificate subject is `CN=Alexey Militskiy` and the Windows
+thumbprint is `44644A7303E549066BF4F8004E708E0473251AFB`. Compare the
+**file** hash with the `kafka-reader.exe` entry in the release's
+`SHA256SUMS.txt`. See the [release test report](TEST-REPORT.md).
 
 ## Add your Kafka server
 

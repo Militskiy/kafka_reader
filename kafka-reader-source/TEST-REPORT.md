@@ -1,4 +1,36 @@
-# Kafka Reader 0.3.0 — verification report
+# Kafka Reader verification reports
+
+## 0.4.0 · Windows x64 release
+
+On 22 November 2026, the Windows GNU build passed the format check and all
+52 release tests (34 library and 18 application). The verification below used
+the signed release executable. Its `--version` output identified Kafka Reader
+0.4.0 and librdkafka 2.16.0.
+
+| Check | Windows 11 result |
+|---|---|
+| Offline self-test with only Windows directories on PATH | 9 checks passed |
+| Native GUI smoke and separate-process reopen | 49 and 17 checks passed. The workspace reopened in Russian. |
+| Disposable Apache Kafka 4.1.2 fixture | 20 checks passed with isolated brokers and credentials. |
+| Sondahub bridge | Read one record and obtained bounds for six partitions. The bridge exited and port 9192 was free. |
+| PE imports | Windows system DLLs only |
+| Packaging and fixture-isolation regression tests | 3 packaging and 4 fixture tests passed |
+
+The EXE carries a SHA-256 Authenticode signature from **Alexey Militskiy**.
+DigiCert timestamped it at 20:22:21 UTC. Verification with the publisher
+certificate pinned confirmed both the executable signature and the timestamp.
+The publisher certificate is self-signed, so the host's default Windows
+verification reported an untrusted root.
+
+Signed EXE SHA-256 (standalone and inside the Windows ZIP):
+`a109416bf2788076aee64de8527ad59dc7c5baf33b1e8716c1f5f73e6c719d1d`.
+The [Windows release evidence](qa/results/v0.4.0/windows-release.json)
+records the toolchain and certificate fingerprints. The
+[Kafka fixture report](qa/results/v0.4.0/kafka-integration.json) lists all
+20 checks and the hash of the executable they exercised. Windows x64 and source
+archives are available for 0.4.0. Linux results below belong to 0.3.0.
+
+## 0.3.0 · Historical verification report
 
 Verified on **22 November 2026 (Europe/Moscow)**. This release updates the
 portable native application previously named Kafka Reader Rust. It changes the
@@ -8,7 +40,7 @@ This report covers the original release. For the later Windows executables,
 see the [headless Windows run](qa/results/v0.3.0/windows-native-2026-11-22.json)
 and the [Windows run after the review fixes](qa/results/v0.3.0/windows-review-fixes-2026-11-22.json).
 
-## Executed checks
+### Executed checks
 
 | Check | Actual result |
 |---|---|
@@ -29,9 +61,9 @@ reports and source-change scope are in `qa/results/v0.3.0/`. Screenshots are in
 `docs/screenshots/v0.3.0/`. Raw temporary display credentials and test workspaces
 are excluded from the distributed archives.
 
-## Requested behavior
+### Requested behavior
 
-### Clean startup and upgrade
+#### Clean startup and upgrade
 
 A new workspace has no servers or topic tabs. Both the sidebar and central
 empty state offer **Add server**. The displayed app name is **Kafka Reader**,
@@ -51,7 +83,7 @@ The public `--demo` option and demo launch scripts are removed. Synthetic
 records exist only for explicit automated `--gui-smoke` verification, and the
 synthetic profile is excluded when that harness saves its workspace.
 
-### Message ordering
+#### Message ordering
 
 **Partition**, **Offset**, and **Time** have separate, aligned columns. Clicking
 a header selects its numeric order; clicking it again reverses direction.
@@ -72,7 +104,7 @@ visible sort order; the headless reader retains its existing received order.
 The auto-scroll control and stick-to-bottom behavior are removed. Follow still
 receives new records without explicitly moving the scrollbar.
 
-### Inspector
+#### Inspector
 
 The inspector now contains **Value**, **Key**, **Headers**, and **Metadata**.
 Value and Key each offer **Auto**, **JSON**, **Text**, and optional **Hex**.
@@ -93,7 +125,7 @@ restoring the synthetic profile, message bodies, session credentials or a reader
 The external observer also enumerates real X11 window IDs, captures framebuffers
 and scans saved files for known test-secret sentinels.
 
-## Exact builds
+### Exact builds
 
 Build toolchain: Rust **1.100.0**, egui/eframe **0.37.0**, rust-rdkafka **0.39.0**,
 librdkafka **2.16.0**. Locked dependencies were retained.
@@ -112,7 +144,7 @@ The Linux release was executed on Debian 13 with glibc 2.41 and X11/Mesa softwar
 rendering. Its highest required GLIBC symbol version is **2.38**. A working
 OpenGL-capable X11 or XWayland desktop is required.
 
-## Scope and limitations
+### Scope and limitations
 
 The Kafka worker, native group-free consumer adapter and connection-dialog
 implementation are byte-for-byte unchanged from the delivered 0.2.0 source
@@ -134,7 +166,7 @@ Populated screenshots use an explicit, temporary synthetic QA fixture. The
 ordinary empty-start and reopen captures demonstrate that fixture's absence
 from normal startup and saved server lists.
 
-## Reproduce the focused checks
+### Reproduce the focused checks
 
 ```bash
 cargo fmt --check

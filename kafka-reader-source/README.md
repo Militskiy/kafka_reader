@@ -1,12 +1,12 @@
-# Kafka Reader — 0.3.0
+# Kafka Reader — 0.4.0
 
 A native desktop prototype for inspecting one Kafka topic when you have broker
 and topic access but no Kafka web UI. The interface is Rust **egui/eframe** with an
 OpenGL renderer. The Kafka engine uses **rust-rdkafka / librdkafka**. There is no
 browser view, Java runtime or .NET runtime.
 
-The app has a real Kafka reader, a headless CLI, Linux and Windows x64 release
-builds, and the complete source. Start with `QUICKSTART.md`.
+Version 0.4.0 is available as a portable Windows x64 executable and as source
+for Windows and Linux. See the [quick start](QUICKSTART.md).
 
 ## Continue development in Codex
 
@@ -26,10 +26,14 @@ TLS, compression or GNU runtime DLLs are needed. The ZIP also contains the quick
 start, example profiles, verification reports and dependency notices. This is
 not a self-extracting wrapper and does not require Java, .NET or a browser.
 
-**Linux x64:** extract the Linux ZIP and run `./kafka-reader`. The release
-was executed on Debian 13 with X11 and Mesa; it requires normal Linux desktop
-libraries and an OpenGL-capable X11/XWayland session. See the build section if
-you need a different Linux baseline.
+The standalone EXE and the EXE inside the Windows ZIP carry the same Authenticode
+signature from **Alexey Militskiy**, with a DigiCert timestamp. The signing
+certificate is self-signed. Windows shows an untrusted publisher on PCs that
+have not explicitly trusted it. See [Verify the Windows download](QUICKSTART.md#verify-the-windows-download).
+
+**Linux x64:** build from source, then run `./target/release/kafka-reader-rust`.
+The desktop requires an OpenGL-capable X11/XWayland session.
+See [Build from source](#build-from-source).
 
 First launch opens an empty workspace with **+ Add server**. Existing real server
 profiles, navigation and preferences restore without connecting or loading
@@ -38,15 +42,8 @@ when loaded. Real servers are identified by their saved connection type, not by
 their name, so a real connection named "Demo" is preserved. There is no demo
 launcher or public `--demo` mode.
 
-The original unsigned Windows release was cross-compiled on Linux. The Windows
-GNU build with the review fixes was exercised on Windows x64, including native
-desktop smoke and reopen, the disposable Kafka fixture and a Sondahub bridge
-read. Each report identifies the build it covers. See the
-[original release report](TEST-REPORT.md), the
-[earlier headless Windows results](qa/results/v0.3.0/windows-native-2026-11-22.json)
-and the [Windows review-build results](qa/results/v0.3.0/windows-review-fixes-2026-11-22.json).
-The distribution has no installer, updater or OS keychain integration. The
-available release targets are Windows x64 and Linux x64.
+The [release test report](TEST-REPORT.md) identifies the tested builds and
+records the checks run on each platform.
 
 ## Workspace and settings
 
@@ -330,7 +327,7 @@ sudo apt-get install build-essential cmake pkg-config perl \
 ```
 
 Linux builds librdkafka, OpenSSL, zlib and zstd from the locked crate sources. The
-supplied binary dynamically needs glibc/libm/libgcc; X11, xkbcommon and OpenGL
+0.3.0 Linux binary dynamically needs glibc/libm/libgcc; X11, xkbcommon and OpenGL
 are loaded at runtime by the windowing backend. Rebuild on an older supported
 distribution if you need an older glibc baseline. The enabled Linux backend is
 X11; Wayland sessions need XWayland.

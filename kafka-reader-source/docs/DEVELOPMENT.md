@@ -1,7 +1,7 @@
 # Development, verification, and packaging
 
 Use these commands from the project root unless a section changes directory.
-They describe the **0.3.0** source layout. Check the current files when updating
+They describe the **0.4.0** source layout. Check the current files when updating
 versions or build targets. [TEST-REPORT.md](../TEST-REPORT.md) is the record of
 what actually ran for the delivered release.
 
@@ -86,11 +86,11 @@ $check = Start-Process -Wait -PassThru -NoNewWindow `
   -ArgumentList '--self-test'
 if ($check.ExitCode -ne 0) { throw 'Kafka Reader self-test failed' }
 
-.\dist\v0.3.0\kafka-reader.exe --data-dir "$env:TEMP\kafka-reader-dev-workspace"
+.\dist\v0.4.0\kafka-reader.exe --data-dir "$env:TEMP\kafka-reader-dev-workspace"
 ```
 
 The build script sets the required native-library environment before invoking
-Cargo and packages the result. The original release used the Linux cross-build
+Cargo and packages the result. The original 0.3.0 release used the Linux cross-build
 route below. The [earlier native Windows report](../qa/results/v0.3.0/windows-native-2026-11-22.json)
 and the [review-build results](../qa/results/v0.3.0/windows-review-fixes-2026-11-22.json)
 identify the executable used for each Windows verification run.
@@ -105,7 +105,7 @@ rustup target add x86_64-pc-windows-gnu
 
 The internal output is
 `target/x86_64-pc-windows-gnu/release/kafka-reader-rust.exe`; the portable output
-is `dist/v0.3.0/kafka-reader.exe`.
+is `dist/v0.4.0/kafka-reader.exe`.
 
 Keep [.cargo/config.toml](../.cargo/config.toml), [build.rs](../build.rs), and
 the static features in [Cargo.toml](../Cargo.toml). They supply static GNU
@@ -117,7 +117,7 @@ distribution model.
 For import inspection, a MinGW binutils environment can use:
 
 ```bash
-x86_64-w64-mingw32-objdump -p dist/v0.3.0/kafka-reader.exe
+x86_64-w64-mingw32-objdump -p dist/v0.4.0/kafka-reader.exe
 ```
 
 Review the imported DLL names for unexpected third-party runtimes. An OS-only
@@ -220,7 +220,7 @@ For an existing pair of binaries built in the default target directories:
 python3 packaging/package.py \
   --linux-exe target/release/kafka-reader-rust \
   --windows-exe target/x86_64-pc-windows-gnu/release/kafka-reader-rust.exe \
-  --out dist/v0.3.0
+  --out dist/v0.4.0
 ```
 
 The packager lists the shipped integration fixture files in `FIXTURE_FILES`.
@@ -233,19 +233,23 @@ binaries with the hashes in the corresponding test reports.
 ## Release versioning
 
 Assign a new `MAJOR.MINOR.PATCH` version to each application release. Use a
-patch bump for fixes and a minor bump for new features. From `0.3.0`, a
-fix-only release is `0.3.1`, and a release that includes the new Russian
-interface is `0.4.0`. For incompatible changes during `0.x`, increment the
+patch bump for fixes and a minor bump for new features. After `0.4.0`, the
+next fix-only release is `0.4.1` and the next feature release is `0.5.0`.
+For incompatible changes during `0.x`, increment the
 minor version and explain the migration in the changelog. From `1.0.0`
 onward, use a major bump for incompatible changes.
 
 1. Set the package version in [Cargo.toml](../Cargo.toml) and update its entry
    in [Cargo.lock](../Cargo.lock). Move the entries being shipped from
    **Unreleased** into a dated section in the [changelog](../CHANGELOG.md).
-2. Update the build scripts, package output and evidence paths for the new
-   version. Build and test the release. Check that the packaged executable's
-   `--version`, the `dist/vX.Y.Z/` directory and the test report agree.
-   Verify the asset hashes against `SHA256SUMS.txt`.
+2. Build and test the release. Record new evidence under `qa/results/vX.Y.Z/`
+   and include it in the archive allowlist. For Windows, sign a copy of the
+   final executable before packaging and pass that copy to
+   `packaging/package.py --windows-exe`. Record the signer, timestamp and
+   Windows trust result in the release evidence. Verify that the executable
+   inside the Windows ZIP has the same SHA-256 as the standalone download.
+   Check that `--version`, the `dist/vX.Y.Z/` directory and the test report
+   agree, and verify the asset hashes against `SHA256SUMS.txt`.
 3. Commit the release as `Release vX.Y.Z` and tag that commit with an annotated
    `vX.Y.Z` tag. When publishing to GitHub, push the commit and tag, then
    create the GitHub Release from that tag. Attach the verified executable,

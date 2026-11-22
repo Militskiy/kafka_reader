@@ -1,9 +1,7 @@
 # Open this project in Codex
 
-This source distribution contains Kafka Reader **0.3.0**, its build and test
-tools, and durable project guidance. The documentation handoff was prepared on
-**22 November 2026**. Application source and runtime behavior are unchanged by
-this handoff.
+This source distribution contains Kafka Reader **0.4.0**, its build and test
+tools, and project guidance.
 
 ## Import the complete source
 
@@ -28,11 +26,6 @@ and these Markdown files in your repository and select that checkout. The
 project instructions belong with the source; a transcript of the earlier chat
 is not required. Keep real connection profiles, exports, and personal workspace
 data outside commits.
-
-If you already have a customized checkout, the separate
-`kafka-reader-codex-docs.zip` contains only the five new Markdown files, with
-paths relative to your project root. Review and merge them into that checkout.
-The full source ZIP also updates the README index and source-packaging allowlist.
 
 ## First prompt
 
@@ -62,7 +55,7 @@ perform the relevant checks, and update project documentation where needed.
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Code map, data flow, and reasons behind sensitive implementation choices |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Build, run, test, and package workflows |
 | [README.md](README.md) | Detailed application behavior and configuration |
-| [TEST-REPORT.md](TEST-REPORT.md) | Checks actually executed for the delivered 0.3.0 release |
+| [TEST-REPORT.md](TEST-REPORT.md) | Checks executed for each release and the platforms they cover |
 
 Codex discovers repository `AGENTS.md` instructions from the project/current
 directory hierarchy when a session starts. The other documents are referenced

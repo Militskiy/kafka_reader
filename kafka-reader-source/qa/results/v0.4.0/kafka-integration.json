@@ -1,0 +1,33 @@
+{
+  "app": "rust",
+  "status": "PASS",
+  "count": 20,
+  "checks": [
+    "Explicit-topic metadata returns three partitions and exact bounds",
+    "Finite earliest snapshot reads all 60 records",
+    "Binary payloads and ordered duplicate/null/empty headers survive the broker round trip",
+    "Null tombstones remain distinct from zero-byte values",
+    "Recent window is five offset positions per partition",
+    "Selected partition and explicit offset work",
+    "Record limit is exact inside a fetched batch",
+    "Timestamp seek reads the requested range",
+    "Timestamp after the readable end returns zero records without rewinding",
+    "Finite snapshot excludes an arrival after captured end offsets",
+    "Latest-follow mode reads a new arrival",
+    "SASL/PLAIN topic-only account can read without consumer-group access",
+    "The restricted account is explicitly denied consumer-group commits",
+    "Unauthorized topic returns a controlled failure",
+    "Wrong password returns a controlled failure",
+    "Existing group offsets remain unchanged despite imported commit/group settings",
+    "Reader sessions create no consumer groups",
+    "JSONL export preserves null keys and Unicode values",
+    "read_committed skips aborted records and completes across transaction-marker gaps",
+    "Finite snapshot completes at the last stable offset while a transaction remains open"
+  ],
+  "fixture": "Apache Kafka 4.1.2, local KRaft, topic-only SASL/PLAIN reader",
+  "completed_at_utc": "2026-11-22T20:23:11.841362+00:00",
+  "tested_platform": "Windows-11-10.0.26300-SP0",
+  "binary_sha256": {
+    "kafka-reader.exe": "a109416bf2788076aee64de8527ad59dc7c5baf33b1e8716c1f5f73e6c719d1d"
+  }
+}

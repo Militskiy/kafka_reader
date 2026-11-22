@@ -1,6 +1,6 @@
 # Architecture
 
-This describes the **Kafka Reader 0.3.0** implementation. Check the referenced
+This describes the **Kafka Reader 0.4.0** implementation. Check the referenced
 source when changing it; [TEST-REPORT.md](../TEST-REPORT.md) records executed
 verification and platform limits.
 

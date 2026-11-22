@@ -5,6 +5,8 @@ import hashlib
 import json
 import stat
 import shutil
+import subprocess
+import sys
 import tempfile
 import zipfile
 from pathlib import Path
@@ -13,7 +15,8 @@ from cargo_notices import notice_files
 
 ROOT = Path(__file__).resolve().parent.parent
 COMMON = ["README.md", "QUICKSTART.md", "CHANGELOG.md", "TEST-REPORT.md", "LICENSE",
-          "THIRD-PARTY-NOTICES.md", "THIRD-PARTY", "examples", "docs/screenshots/v0.3.0", "qa/results/v0.3.0"]
+          "THIRD-PARTY-NOTICES.md", "THIRD-PARTY", "examples", "docs/screenshots/v0.3.0",
+          "qa/results/v0.3.0", "qa/results/v0.4.0"]
 FIXTURE_FILES = [
     ".gitignore", "FixtureHost.java", "README.md", "pom.xml", "run-bridge-check.py",
     "run-gui-v02.py", "run-gui-v03.py", "run-integration.py", "server.properties",
@@ -107,9 +110,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--linux-exe", type=Path)
     parser.add_argument("--windows-exe", type=Path)
-    parser.add_argument("--out", type=Path, default=ROOT / "dist/v0.3.0")
+    parser.add_argument("--out", type=Path, help="Output directory (default: dist/v<Cargo package version>)")
     args = parser.parse_args()
-    manifest = package(args.out, args.linux_exe, args.windows_exe)
+    out = args.out
+    if out is None:
+        metadata = json.loads(subprocess.check_output(
+            ["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"], cwd=ROOT,
+        ))
+        version = next(pkg["version"] for pkg in metadata["packages"] if Path(pkg["manifest_path"]) == ROOT / "Cargo.toml")
+        out = ROOT / "dist" / f"v{version}"
+    manifest = package(out, args.linux_exe, args.windows_exe)
+    print(f"Packaged files in {out}", file=sys.stderr)
     print(json.dumps(manifest, indent=2))
 
 

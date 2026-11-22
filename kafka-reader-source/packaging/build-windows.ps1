@@ -2,7 +2,6 @@ $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path $PSScriptRoot -Parent)
 
 # Rust GNU target + Python 3 + MinGW-w64 GCC/binutils + CMake/Ninja/Perl/make.
-# The Linux cross-build route is the route used for the delivered executable.
 $env:CMAKE_GENERATOR = 'Ninja'
 $env:OPENSSL_STATIC = '1'
 $env:RUSTFLAGS = '-C target-feature=+crt-static -C link-arg=-static-libgcc -C link-arg=-static-libstdc++'
@@ -22,4 +21,3 @@ if ($LASTEXITCODE -ne 0) { throw 'Rust Windows build failed.' }
 $rustBuildDirectory = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { 'target' }
 python packaging/package.py --windows-exe (Join-Path $rustBuildDirectory 'x86_64-pc-windows-gnu/release/kafka-reader-rust.exe')
 if ($LASTEXITCODE -ne 0) { throw 'Portable ZIP packaging failed.' }
-Write-Host 'Windows EXE, Windows ZIP and source ZIP are in dist/v0.3.0/. See docs/DEVELOPMENT.md for runtime checks on this build.'

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Observe v0.3 GUI checks, native windows, persisted state, and a real process restart."""
+"""Observe GUI checks, native windows, persisted state, and a real process restart."""
 import argparse
 import base64
 from datetime import datetime, timezone
@@ -23,9 +23,14 @@ parser.add_argument('--xvfb',type=Path)
 parser.add_argument('--timeout',type=int,default=180)
 args=parser.parse_args()
 exe_sha256=hashlib.sha256(args.exe.read_bytes()).hexdigest()
+banner = subprocess.check_output([str(args.exe.resolve()), '--version'], encoding='utf-8', timeout=10)
+match = re.match(r'^Kafka Reader (\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)*)\s', banner)
+if not match:
+    parser.error("Expected a Kafka Reader version in the executable's --version output.")
+app_version = match.group(1)
 root=Path(__file__).resolve().parent
 tag=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'-'+secrets.token_hex(2)
-out=(args.output or root/'work-v0.3.0'/('gui-'+args.kind)/tag).resolve()
+out=(args.output or root/f'work-v{app_version}'/('gui-'+args.kind)/tag).resolve()
 out.mkdir(parents=True,exist_ok=False)
 data=out/'app-data';data.mkdir()
 smoke=out/'smoke';smoke.mkdir()
@@ -128,7 +133,7 @@ try:
     clean_workspace=json.loads((empty_data/'workspace.json').read_text()) if (empty_data/'workspace.json').exists() else {}
     saved_workspace=json.loads((data/'workspace.json').read_text()) if (data/'workspace.json').exists() else {}
     checks={'normalStartupExitZero':empty_code==0,'normalStartupScreenshotExists':(empty/'kafka-reader-empty.png').is_file(),'normalStartupHasNoSavedServersOrTabs':not clean_workspace.get('servers') and not clean_workspace.get('tabs'),'syntheticServerNotPersisted':bool(saved_workspace.get('servers')) and all(not server.get('offline',False) for server in saved_workspace.get('servers',[])),'smokeExitZero':smoke_code==0,'smokeReportsPass':pass_report(smoke),'reopenExitZero':reopen_code==0,'reopenReportsPass':pass_report(reopen),'reopenReportExists':any((reopen/name).is_file() for name in ['reopen-check.json','gui-reopen-report.json']),'requiredNativeWindowsObserved':all(required.values()),'configurationWindowsSeparate':all(entry['separateNativeWindow'] for entry in native),'sentinelsAbsentFromPersistedFiles':not leaks}
-    report={'appVersion':'0.3.0','kind':args.kind,'executableSha256':exe_sha256,'completedAtUtc':datetime.now(timezone.utc).isoformat(),'status':'PASS' if all(checks.values()) else 'FAIL','output':str(out),'dataDirectory':str(data),'checks':checks,'observedPhases':required,'secretLeaks':leaks,'nativeWindows':observations,'persistedFiles':[str(path.relative_to(data)) for path in sorted(data.rglob('*')) if path.is_file()]}
+    report={'appVersion':app_version,'kind':args.kind,'executableSha256':exe_sha256,'completedAtUtc':datetime.now(timezone.utc).isoformat(),'status':'PASS' if all(checks.values()) else 'FAIL','output':str(out),'dataDirectory':str(data),'checks':checks,'observedPhases':required,'secretLeaks':leaks,'nativeWindows':observations,'persistedFiles':[str(path.relative_to(data)) for path in sorted(data.rglob('*')) if path.is_file()]}
     (out/'observer-report.json').write_text(json.dumps(report,indent=2)+'\n')
     print(json.dumps({key:value for key,value in report.items() if key!='nativeWindows'},indent=2))
     raise SystemExit(0 if all(checks.values()) else 1)
