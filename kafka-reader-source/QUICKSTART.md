@@ -6,8 +6,10 @@
 executable with Kafka, TLS and compression code linked into it. No companion
 library DLLs, Java, .NET, browser or installer are required. The ZIP contains
 optional documentation, example profiles and dependency notices alongside it.
-The Windows build is unsigned, cross-compiled and dependency-inspected;
-**Windows execution has not been verified**.
+The original Windows release is unsigned and was cross-compiled. A later
+Windows build passed its headless checks on Windows x64. Native desktop
+interaction there remains unverified. See the
+[Windows host results](qa/results/v0.3.0/windows-native-2026-11-22.json).
 
 **Linux x64:** extract the Linux ZIP and run `./kafka-reader`. If your
 extractor dropped executable permissions, use `chmod +x kafka-reader`.

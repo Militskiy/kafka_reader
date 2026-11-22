@@ -1,0 +1,79 @@
+{
+  "date": "2026-11-22",
+  "application_version": "0.3.0",
+  "source_baseline": "453bd268d74d44ddccc6ecb4c6360294e3fed0df",
+  "host": "Windows NT 10.0.26300 x64",
+  "target": "x86_64-pc-windows-gnu",
+  "rustc": "1.100.0",
+  "mingw_w64_gcc": "16.2.0",
+  "binary": {
+    "file": "kafka-reader.exe",
+    "bytes": 18191360,
+    "sha256": "5c0b0540d1be05d009e8ce7fcd5783d02d0deb24b32d432387f63191b7a66e15",
+    "imports": [
+      "advapi32.dll",
+      "api-ms-win-core-synch-l1-2-0.dll",
+      "bcryptprimitives.dll",
+      "crypt32.dll",
+      "dwmapi.dll",
+      "gdi32.dll",
+      "imm32.dll",
+      "kernel32.dll",
+      "msvcrt.dll",
+      "ntdll.dll",
+      "ole32.dll",
+      "opengl32.dll",
+      "secur32.dll",
+      "shell32.dll",
+      "user32.dll",
+      "uxtheme.dll",
+      "ws2_32.dll"
+    ]
+  },
+  "checks": {
+    "format": {
+      "command": "cargo fmt --check",
+      "exit_code": 0
+    },
+    "build": {
+      "command": ".\\packaging\\build-windows.ps1",
+      "exit_code": 0
+    },
+    "release_tests": {
+      "command": "cargo test --locked --release --target x86_64-pc-windows-gnu",
+      "library_passed": 22,
+      "application_passed": 11,
+      "failed": 0,
+      "ignored": 0
+    },
+    "offline_self_test": {
+      "command": "kafka-reader.exe --self-test",
+      "path_environment": "Windows and System32 only",
+      "exit_code": 0,
+      "result": {
+        "checks": 9,
+        "librdkafka": "2.16.0",
+        "selfTest": "PASS"
+      }
+    },
+    "bridge": {
+      "runner": "qa/integration/run-bridge-check.py",
+      "runtime": "Node.js 22",
+      "bootstrap": "127.0.0.1:9192",
+      "protocol": "PLAINTEXT",
+      "topic": "fleet.telemetry",
+      "partitions": 6,
+      "records": 1,
+      "skipped": 0,
+      "completion": "Record limit reached",
+      "exit_code": 0,
+      "child_exited": true,
+      "listening_on_9192_after_run": false
+    }
+  },
+  "not_run": [
+    "Native desktop GUI inspection",
+    "Disposable Kafka integration suite",
+    "Live TLS, mTLS, and SCRAM"
+  ]
+}

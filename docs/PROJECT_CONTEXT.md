@@ -86,14 +86,16 @@ X11/Mesa; the delivered Linux binary needs GLIBC 2.38 or newer. See the
 [release test report](../TEST-REPORT.md) and
 [machine-readable evidence](../qa/results/v0.3.0/).
 
-The Windows executable was cross-compiled and its imports audited. **Windows
-runtime execution was not performed.** It is unsigned. A future Windows test
-should record what actually ran rather than relabel existing Linux evidence.
+The original unsigned Windows release was cross-compiled and its imports were
+audited. A separate Windows GNU build passed 33 release tests and 9 offline
+self-checks on Windows x64. Its headless reader inspected six partitions and
+read one record from `fleet.telemetry` over the Sondahub PLAINTEXT bridge.
+Windows desktop interaction remains unverified. The executable hash and host
+checks are in the [native Windows report](../kafka-reader-source/qa/results/v0.3.0/windows-native-2026-11-22.json).
 
 The earlier 0.2.0 release passed 20 local Kafka checks, including a topic-only
-SASL/PLAIN principal and unchanged consumer-group state. Those are historical
-results; the 0.3.0 UI update did not rerun the live-broker suite. No successful
-public Sondahub or production-broker connection is claimed by this repository.
+SASL/PLAIN principal and unchanged consumer-group state. The 0.3.0 UI update
+and the subsequent Windows host check did not repeat that fixture suite.
 
 Other current limits:
 

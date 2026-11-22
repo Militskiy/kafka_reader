@@ -38,11 +38,13 @@ when loaded. Real servers are identified by their saved connection type, not by
 their name, so a real connection named "Demo" is preserved. There is no demo
 launcher or public `--demo` mode.
 
-The Windows build is unsigned and was cross-compiled on Linux. Its PE import
-table was inspected, but **it has not been executed on Windows**. Linux tests,
-native-window observations and exact binary hashes are in `TEST-REPORT.md` and
-`qa/results/v0.3.0/`. Earlier real-broker evidence is identified separately in
-the report. There is no installer, updater or OS
+The original unsigned Windows release was cross-compiled on Linux and its PE
+imports were inspected. A later Windows GNU build passed the release tests,
+offline self-test, and a headless read through the Sondahub bridge on Windows
+x64. Desktop interaction on Windows remains unverified. See the
+[original release report](TEST-REPORT.md) and the
+[native Windows report](qa/results/v0.3.0/windows-native-2026-11-22.json)
+for the checks and hashes of the respective binaries. There is no installer, updater or OS
 keychain integration. No macOS or ARM binary is supplied.
 
 ## Workspace and settings

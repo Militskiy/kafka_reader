@@ -66,10 +66,18 @@ matches the supplied build recipe. Install the Rust GNU target and make
 MinGW-w64 x64 GCC/G++, binutils, CMake, Ninja, Make, Perl, Python and pkgconf
 available on PATH. On Windows the script supports an MSYS2 MinGW-w64 toolchain.
 
-In PowerShell, from the project root:
+For the default MSYS2 installation, add the tools to the current PowerShell
+session. Adjust `C:\msys64` if MSYS2 is installed elsewhere.
+
+```powershell
+$env:Path = "$env:USERPROFILE\.cargo\bin;C:\msys64\mingw64\bin;C:\msys64\usr\bin;$env:Path"
+```
+
+Run these commands from the directory containing `Cargo.toml`.
 
 ```powershell
 rustup target add x86_64-pc-windows-gnu
+cargo fmt --check
 .\packaging\build-windows.ps1
 cargo test --locked --release --target x86_64-pc-windows-gnu
 
@@ -82,10 +90,10 @@ if ($check.ExitCode -ne 0) { throw 'Kafka Reader self-test failed' }
 ```
 
 The build script sets the required native-library environment before invoking
-Cargo and packages the result. The Windows-host recipe needs actual execution
-on a Windows development machine; the supplied release was built using the
-Linux cross-build route below. Do not describe either recipe as runtime
-validation merely because it links successfully.
+Cargo and packages the result. The original release used the Linux cross-build
+route below. The [native Windows report](../kafka-reader-source/qa/results/v0.3.0/windows-native-2026-11-22.json)
+identifies the later binary used for the Windows release tests, offline
+self-test, and read-only bridge check.
 
 For a Linux cross-build, install the MinGW-w64 compiler/binutils and the other
 native build tools, including Ninja, then run:

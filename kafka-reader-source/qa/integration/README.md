@@ -25,6 +25,27 @@ The wrapper starts and stops the broker and fixture helper, invokes the prototyp
 
 The fixture credentials are intentional dummy values used only on the local test listener. Application profiles must use native librdkafka properties (`sasl.username`, `sasl.password`, TLS PEM/CA paths), not the Java client's `sasl.jaas.config` or JKS truststore settings.
 
+## Read-only check through the Sondahub bridge
+
+From the project root, supply the built executable, the path to your copy of
+`sondahub-bridge.mjs`, and an exact topic containing at least one readable record.
+
+```powershell
+python qa/integration/run-bridge-check.py --exe .\dist\v0.3.0\kafka-reader.exe --bridge-script "$env:USERPROFILE\sondahub-bridge.mjs" --topic fleet.telemetry
+```
+
+The check uses `npx.cmd --yes --package=node@22` to locate Node 22, starts the
+bridge, and waits for that process to confirm it has bound port 9192. It stops
+its bridge when the check succeeds, fails, or is interrupted with Ctrl+C.
+If you already run the bridge yourself, omit `--bridge-script` and stop it in
+its own window with Ctrl+C after the check.
+
+The check uses PLAINTEXT on `127.0.0.1:9192` by default. For a bridge that
+needs additional client settings, pass `--config PATH` with a librdkafka profile
+whose bootstrap address is `127.0.0.1:9192` or `localhost:9192`. The check
+validates partition bounds and uses a finite read capped at one record. Only
+counts and status are reported.
+
 ## Coverage
 
 Twenty checks exercise exact-topic metadata, finite snapshots, recent windows, partition selection, explicit offsets, timestamps, exact record caps, late arrivals, following, null/empty/binary data, duplicate headers, Unicode export, restricted SASL access, denied group commits, authentication/authorization failures, unchanged existing group offsets, no newly created groups, aborted transactions, offset gaps and an open transaction's last stable offset.
