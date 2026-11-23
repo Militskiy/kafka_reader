@@ -15,7 +15,7 @@ use presentation::{
     MessageOrder, PayloadFormat, SortColumn, format_payload_in, mode_label, record_time,
 };
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     path::PathBuf,
     sync::Arc,
     thread,
@@ -140,6 +140,7 @@ pub struct ReaderApp {
     workspace: Workspace,
     persistence_error: Option<String>,
     credentials: BTreeMap<u64, Properties>,
+    credential_errors: BTreeSet<u64>,
     oauth_sessions: BTreeMap<u64, OAuthSession>,
     view: TopicView,
     cached: BTreeMap<Tab, TopicView>,
@@ -203,6 +204,7 @@ impl ReaderApp {
             workspace,
             persistence_error,
             credentials: BTreeMap::new(),
+            credential_errors: BTreeSet::new(),
             oauth_sessions: BTreeMap::new(),
             view,
             cached: BTreeMap::new(),
@@ -224,6 +226,9 @@ impl ReaderApp {
             screenshot_requested: false,
             next_preview_generation: 0,
         };
+        if cfg!(windows) {
+            app.restore_credentials();
+        }
         // Restoring a workspace or taking a screenshot never starts a reader.
         if app.options.smoke {
             let tab = Tab {
@@ -236,6 +241,37 @@ impl ReaderApp {
             }
         }
         app
+    }
+    fn restore_credentials(&mut self) {
+        for &id in self.workspace.remembered.keys() {
+            let store = &self.options.store;
+            let Some(handle) = store.remembered_credential(&self.workspace, id) else {
+                continue;
+            };
+            let result = handle.load().and_then(|secrets| {
+                if secrets.contains_key("oauth.refresh.token") {
+                    let mut props = self
+                        .workspace
+                        .server(id)
+                        .ok_or("Server is unavailable")?
+                        .properties
+                        .clone();
+                    props.extend(secrets.clone());
+                    let session = self.oauth_sessions.entry(id).or_default();
+                    session.bind(&props);
+                    session.configure_remembering(|_| Ok(((), Some(handle))))?;
+                }
+                Ok(secrets)
+            });
+            match result {
+                Ok(secrets) => {
+                    self.credentials.insert(id, secrets);
+                }
+                Err(_) => {
+                    self.credential_errors.insert(id);
+                }
+            }
+        }
     }
     fn language(&self) -> Language {
         self.workspace.settings.language.resolve()
@@ -399,6 +435,12 @@ impl ReaderApp {
         let server = self
             .server()
             .ok_or(lang.text("Select a topic first", "Сначала выберите топик"))?;
+        if self.credential_errors.contains(&server.id) {
+            return Err(lang.text(
+                "Open Authentication to replace or forget the unavailable saved credential",
+                "Откройте «Аутентификация», чтобы заменить или удалить недоступные сохранённые данные",
+            ).into());
+        }
         Ok(session_properties(server, &self.credentials))
     }
     fn request(&self, inspect: bool) -> Result<Request, String> {

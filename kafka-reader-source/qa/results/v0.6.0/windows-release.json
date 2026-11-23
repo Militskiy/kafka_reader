@@ -1,0 +1,92 @@
+{
+  "version": "0.6.0",
+  "date": "2026-11-23",
+  "platform": "Windows-11-10.0.26300-SP0",
+  "target": "x86_64-pc-windows-gnu",
+  "binary_sha256": "74a0b243e2c7408b320ff36c596b003346f6d506471d8e1667dd18ccc7e17933",
+  "version_output": "Kafka Reader 0.6.0 · native binary · librdkafka 2.16.0",
+  "format_check": "PASS",
+  "release_tests": {
+    "library": 48,
+    "application": 22,
+    "failed": 0
+  },
+  "credential_tests": [
+    "model::tests::profiles_remove_credentials",
+    "model::tests::oauth_profiles_keep_configuration_and_strip_credentials",
+    "oauth::tests::only_https_endpoints_without_credentials_or_fragments_are_accepted",
+    "reader::tests::refresh_credentials_never_enter_native_kafka_properties",
+    "remembered::tests::credential_references_cannot_select_arbitrary_paths",
+    "remembered::tests::dpapi_modified_connection_cannot_unlock_existing_blob",
+    "oauth_context::tests::remember_the_latest_grant_and_forget_during_renewal",
+    "remembered::tests::dpapi_restore_rotation_and_forget_are_scoped_to_the_saved_generation",
+    "app::view_tests::credentials_never_cross_server_ids",
+    "app::dialogs::tests::refresh_token_profile_roundtrips_with_only_its_own_credentials",
+    "app::dialogs::tests::an_unreadable_credential_can_be_replaced_or_forgotten",
+    "app::dialogs::tests::only_the_chosen_credential_reopens_and_forget_requires_save"
+  ],
+  "offline_self_test": {
+    "checks": 9,
+    "librdkafka": "2.16.0",
+    "selfTest": "PASS"
+  },
+  "gui_smoke": {
+    "appVersion": "0.6.0",
+    "checks": 49,
+    "guiSmoke": "PASS",
+    "nativeChildViewport": true,
+    "openTabs": 4,
+    "retained": 120
+  },
+  "gui_reopen": {
+    "appVersion": "0.6.0",
+    "checks": 19,
+    "credentialsRestored": true,
+    "guiReopen": "PASS",
+    "language": "russian",
+    "offlineServersRestored": 0,
+    "realServersRestored": 1,
+    "recordsRestored": 0,
+    "sessionOnlyCredentialsRestored": false,
+    "sessionStarted": false
+  },
+  "apache_kafka": {
+    "checks": 25,
+    "report": "kafka-integration.json"
+  },
+  "bridge": {
+    "partitions": 6,
+    "records": 1,
+    "port_9192_free_after_exit": true
+  },
+  "packaging_unit_tests": 3,
+  "fixture_isolation_tests": 4,
+  "authenticode": {
+    "publisher": "CN=Alexey Militskiy",
+    "thumbprint": "44644A7303E549066BF4F8004E708E0473251AFB",
+    "timestamp_responder": "CN=DigiCert SHA256 RSA4096 Timestamp Responder 2026 1, O=\"DigiCert, Inc.\", C=US",
+    "windows_trust_status": "UnknownError",
+    "timestamp_time": "Nov 23 09:20:35 2026 GMT",
+    "verification": "Verified against the pinned publisher certificate and public timestamp CA roots"
+  },
+  "pe_imports": [
+    "advapi32.dll",
+    "api-ms-win-core-synch-l1-2-0.dll",
+    "bcrypt.dll",
+    "bcryptprimitives.dll",
+    "crypt32.dll",
+    "dwmapi.dll",
+    "gdi32.dll",
+    "imm32.dll",
+    "kernel32.dll",
+    "msvcrt.dll",
+    "ntdll.dll",
+    "ole32.dll",
+    "opengl32.dll",
+    "secur32.dll",
+    "shell32.dll",
+    "user32.dll",
+    "uxtheme.dll",
+    "ws2_32.dll"
+  ]
+}

@@ -1,5 +1,23 @@
 # Kafka Reader verification reports
 
+## 0.6.0 · Windows x64 release
+
+Windows 11 ran the locked GNU release build, the format check and 70 Rust
+tests. The offline self-test completed 9 checks. The native desktop smoke
+completed 49 checks and a second process completed 19 reopen checks
+using an isolated workspace. Windows DPAPI restored the opted-in login. The
+reopen also checked that TLS credentials and messages stayed session-only.
+
+Tests with synthetic refresh tokens covered renewal, replacement, forgetting
+and attempts to use a saved credential after changing the connection. The
+disposable Apache Kafka 4.1.2 fixture completed 25 checks, including OAuth
+over TLS. The Sondahub bridge returned one record and bounds for 6
+partitions. Its process exited and port 9192 was free.
+
+The standalone Windows EXE has SHA-256 `74a0b243e2c7408b320ff36c596b003346f6d506471d8e1667dd18ccc7e17933`.
+See the [Windows results](qa/results/v0.6.0/windows-release.json) and
+[Kafka checks](qa/results/v0.6.0/kafka-integration.json).
+
 ## 0.5.0 · Windows x64 release
 
 Verified on Windows 11 on 23 November 2026. The signed executable reports

@@ -4,7 +4,7 @@ use crate::model::{Properties, sensitive_property};
 use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{ErrorKind, Read, Write},
     path::{Path, PathBuf},
@@ -116,6 +116,9 @@ pub struct Tab {
 pub struct Workspace {
     pub version: u32,
     pub servers: Vec<Server>,
+    /// Opaque references to per-user DPAPI records. Credentials never enter workspace.json.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub remembered: BTreeMap<u64, String>,
     pub selected_server: u64,
     pub active_tab: Option<Tab>,
     pub tabs: Vec<Tab>,
@@ -126,6 +129,7 @@ impl Default for Workspace {
         Self {
             version: 2,
             servers: vec![],
+            remembered: BTreeMap::new(),
             selected_server: 0,
             active_tab: None,
             tabs: vec![],
@@ -165,6 +169,7 @@ impl Workspace {
                 .collect(),
             }],
             selected_server: 1,
+            remembered: BTreeMap::new(),
             active_tab: Some(tab.clone()),
             tabs: vec![tab],
             settings: Settings::default(),
@@ -183,6 +188,7 @@ impl Workspace {
             return;
         }
         self.servers.retain(|server| !server.offline);
+        self.remembered.retain(|id, _| !removed.contains(id));
         self.tabs.retain(|tab| !removed.contains(&tab.server));
         if self
             .active_tab
@@ -296,6 +302,14 @@ impl Workspace {
                 }
             }
         }
+        let mut references = BTreeSet::new();
+        if self.remembered.iter().any(|(id, reference)| {
+            !ids.contains(id)
+                || !crate::remembered::valid_reference(reference)
+                || !references.insert(reference)
+        }) {
+            return Err("Invalid remembered credential reference".into());
+        }
         if !(ids.contains(&self.selected_server)
             || (self.servers.is_empty() && self.selected_server == 0))
         {
@@ -359,6 +373,22 @@ impl Drop for SmokeDirectory {
         // Only implicit smoke directories belong to the app. Leave unrelated files alone.
         let _ = fs::remove_file(self.0.join("workspace.json"));
         let _ = fs::remove_file(self.0.join("workspace.lock"));
+        if let Ok(entries) = fs::read_dir(&self.0) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                if name
+                    .to_str()
+                    .and_then(|s| s.strip_prefix("credential-"))
+                    .and_then(|s| {
+                        s.strip_suffix(".dpapi")
+                            .or_else(|| s.strip_suffix(".refresh.lock"))
+                    })
+                    .is_some_and(crate::remembered::valid_reference)
+                {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
+        }
         let _ = fs::remove_dir(&self.0);
     }
 }
@@ -441,7 +471,7 @@ impl Store {
         *self.last_read.borrow_mut() = Some(bytes);
         Ok(value)
     }
-    pub fn save(&self, workspace: &Workspace) -> Result<(), String> {
+    pub(crate) fn write_workspace_locked(&self, workspace: &Workspace) -> Result<(), String> {
         let mut safe = workspace.clone();
         safe.sanitize();
         safe.validate()?;
@@ -451,20 +481,6 @@ impl Store {
         if bytes.len() > 1024 * 1024 {
             return Err("Workspace exceeds 1 MiB".into());
         }
-        workspace_directory(true)
-            .create(&self.directory)
-            .map_err(|e| e.to_string())?;
-        // A separate, stable lock file serializes comparison and replacement across processes.
-        // Closing the handle releases its OS lock, including after a process exits unexpectedly.
-        let lock = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(self.directory.join("workspace.lock"))
-            .map_err(|e| e.to_string())?;
-        lock.try_lock()
-            .map_err(|e| format!("Could not lock the workspace for saving: {e}"))?;
         if self.read_bytes()?.as_ref() != self.last_read.borrow().as_ref() {
             return Err(
                 "The workspace changed on disk. Reopen it before saving this session.".into(),
@@ -473,6 +489,30 @@ impl Store {
         atomic_write(&self.path(), &bytes)?;
         *self.last_read.borrow_mut() = Some(bytes);
         Ok(())
+    }
+    pub fn save(&self, workspace: &Workspace) -> Result<(), String> {
+        let _lock = self.lock()?;
+        self.write_workspace_locked(workspace)
+    }
+
+    pub(crate) fn lock(&self) -> Result<fs::File, String> {
+        let file = self.lock_file()?;
+        file.try_lock()
+            .map_err(|e| format!("Could not lock the workspace for saving: {e}"))?;
+        Ok(file)
+    }
+    pub(crate) fn lock_file(&self) -> Result<fs::File, String> {
+        workspace_directory(true)
+            .create(&self.directory)
+            .map_err(|e| e.to_string())?;
+        // Closing this stable file handle releases its OS lock, even on process exit.
+        fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(self.directory.join("workspace.lock"))
+            .map_err(|e| e.to_string())
     }
 }
 

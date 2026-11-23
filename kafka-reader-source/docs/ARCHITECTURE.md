@@ -1,6 +1,6 @@
 # Architecture
 
-This describes the **Kafka Reader 0.5.0** implementation. Check the referenced
+This describes the **Kafka Reader 0.6.0** implementation. Check the referenced
 source when changing it; [TEST-REPORT.md](../TEST-REPORT.md) records executed
 verification and platform limits.
 
@@ -48,8 +48,9 @@ services callbacks while metadata or partition operations are in progress.
 An OAuth session belongs to one server and can carry a rotated refresh token
 from a successful connection test into subsequent reads. Token exchange uses
 the platform TLS verifier or the configured SSO CA. Kafka verifies its TLS
-peer using the broker settings. The app stores refresh and access tokens in
-memory and excludes them from saved workspaces and profile exports.
+peer using the broker settings. Access tokens stay in memory. A refresh token
+can be remembered per server on Windows with explicit consent. Profile
+exports omit both tokens.
 
 `safe_properties` removes `group.id`, `group.instance.id` and unsupported or
 executable extension hooks. It forces modern and legacy automatic commits,
@@ -178,8 +179,13 @@ with the session's last snapshot. If another instance has saved edits, reopen
 the workspace before saving again.
 It persists profiles, registered topics, favorites, tab identities and settings;
 records, view filters/sorts and session credentials are not serialized.
-Usernames, passwords, tokens and inline private-key material stay in memory;
-certificate/key paths may be saved. Invalid existing workspaces are reported
+The Windows editor can save a SASL username/password pair or OAuth refresh
+token in a separate current-user DPAPI file. The workspace contains an opaque
+reference. The protected credential is bound to its server and connection
+settings. On rotation, the stored refresh token is replaced. Changing or
+forgetting a credential invalidates the prior reference. Private keys, TLS
+passwords and access tokens stay in memory. Certificate paths may be saved.
+Invalid existing workspaces are reported
 and protected from automatic overwrite by the app's persistence-error state.
 
 Normal startup is empty or restores saved real profiles without connecting.

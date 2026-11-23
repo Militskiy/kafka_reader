@@ -53,8 +53,10 @@ downloaded toolchains are not part of this repository.
   selected-record identity. The inspector has Value, Key, Headers, Metadata;
   Hex is an optional Value/Key format, never an automatic duplicate key dump.
 - **Compatible persistence.** Startup never connects automatically. Preserve
-  real profiles, favorites, and preferences. Session credentials and message
-  bodies are not persisted. Keep malformed workspace files intact. Migrate old
+  real profiles, favorites, and preferences. Keep credentials session-only by default.
+  Persist only explicitly remembered login credentials or refresh tokens using Windows
+  user-scoped DPAPI. Keep secrets out of profile exports and message bodies out of
+  the workspace. Keep malformed workspace files intact. Migrate old
   samples by their explicit offline marker, not a server name or ID.
 - **Portable Windows delivery.** Preserve the genuine single native EXE, static
   Kafka/TLS/compression linkage, and required GNU runtime flags. Keep

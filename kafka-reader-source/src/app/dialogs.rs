@@ -1,5 +1,6 @@
 use super::*;
 use kafka_reader_rust::language::{Language, LanguagePreference};
+use kafka_reader_rust::remembered::{RememberChange, RememberedCredential};
 use std::fs;
 use std::io::Write;
 
@@ -26,6 +27,11 @@ pub(super) struct ServerEditor {
     pub message: String,
     test: Option<Session>,
     oauth_session: OAuthSession,
+    pub(super) remember: bool,
+    saved_credential: Option<RememberedCredential>,
+    saved_username: String,
+    saved_secret: String,
+    saved_context: Properties,
     pub is_new: bool,
 }
 impl ServerEditor {
@@ -87,8 +93,62 @@ impl ServerEditor {
             message: String::new(),
             test: None,
             oauth_session: OAuthSession::default(),
+            remember: false,
+            saved_credential: None,
+            saved_username: String::new(),
+            saved_secret: String::new(),
+            saved_context: Properties::new(),
             is_new,
         }
+    }
+    fn use_saved_input(&mut self, handle: RememberedCredential, session: Option<&Properties>) {
+        self.remember = true;
+        self.saved_credential = Some(handle);
+        self.saved_username.clone_from(&self.username);
+        if let Some(session) = session {
+            self.saved_context = self
+                .extra_session_properties(session)
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+        }
+        // Keep the protected value separate from editable text. A blank field may
+        // reuse it only for the exact connection from which it was loaded.
+        self.saved_secret = if self.mechanism == "OAUTHBEARER" {
+            std::mem::take(&mut self.refresh_token)
+        } else {
+            std::mem::take(&mut self.password)
+        };
+    }
+    fn auth_key(&self) -> &'static str {
+        if self.mechanism == "OAUTHBEARER" {
+            "oauth.refresh.token"
+        } else {
+            "sasl.password"
+        }
+    }
+    fn extra_session_properties<'a>(
+        &self,
+        credentials: &'a Properties,
+    ) -> impl Iterator<Item = (&'a String, &'a String)> {
+        let auth_key = self.auth_key();
+        credentials
+            .iter()
+            .filter(move |(key, _)| key.as_str() != "sasl.username" && key.as_str() != auth_key)
+    }
+    fn saved_for(&self, server: &Server, credentials: &Properties) -> bool {
+        self.saved_credential
+            .as_ref()
+            .is_some_and(|record| record.same_target(server))
+            && !self.saved_secret.is_empty()
+            && self
+                .extra_session_properties(credentials)
+                .eq(self.saved_context.iter())
+            && (self.mechanism == "OAUTHBEARER"
+                || credentials
+                    .get("sasl.username")
+                    .map(String::as_str)
+                    .unwrap_or_default()
+                    == self.saved_username)
     }
     pub(super) fn build(&self, lang: Language) -> Result<(Server, Properties), String> {
         let mut p = parse_properties(&self.advanced)?;
@@ -158,7 +218,7 @@ impl ServerEditor {
                     .into());
             }
         }
-        let secrets = p
+        let mut secrets: Properties = p
             .iter()
             .filter(|(k, v)| session_only(k, v))
             .map(|(k, v)| (k.clone(), v.clone()))
@@ -186,6 +246,13 @@ impl ServerEditor {
         if !self.test_topic.trim().is_empty() {
             server.register_topic(self.test_topic.trim())?;
         }
+        if self.saved_credential.is_some() && !secrets.contains_key(self.auth_key()) {
+            if self.remember && self.saved_for(&server, &secrets) {
+                secrets.insert(self.auth_key().into(), self.saved_secret.clone());
+            } else if self.username == self.saved_username {
+                secrets.remove("sasl.username");
+            }
+        }
         Ok((server, secrets))
     }
     fn bound_oauth(&self, props: &Properties, saved: Option<&OAuthSession>) -> OAuthSession {
@@ -201,24 +268,34 @@ impl ServerEditor {
         if self.test.as_ref().is_some_and(Session::running) {
             return;
         }
-        let request: Result<Request, String> = (|| {
-            validate_topic(self.test_topic.trim())?;
-            let (server, credentials) = self.build(lang)?;
-            let mut props = server.properties;
-            props.extend(credentials);
-            Ok(Request {
-                props,
-                topic: self.test_topic.trim().into(),
-                partitions: vec![],
-                mode: Mode::Earliest,
-                value: 0,
-                follow: false,
-                max_records: 1,
-                seconds: 5,
-                demo: server.offline,
-                inspect: true,
-            })
-        })();
+        let request: Result<Request, String> =
+            (|| {
+                validate_topic(self.test_topic.trim())?;
+                let (server, credentials) = self.build(lang)?;
+                if self.saved_credential.is_some()
+                    && self.protocol.starts_with("SASL")
+                    && !credentials.contains_key(self.auth_key())
+                {
+                    return Err(lang.text(
+                    "Enter a credential for this connection in Authentication",
+                    "Введите учётные данные для этого подключения на вкладке «Аутентификация»",
+                ).into());
+                }
+                let mut props = server.properties;
+                props.extend(credentials);
+                Ok(Request {
+                    props,
+                    topic: self.test_topic.trim().into(),
+                    partitions: vec![],
+                    mode: Mode::Earliest,
+                    value: 0,
+                    follow: false,
+                    max_records: 1,
+                    seconds: 5,
+                    demo: server.offline,
+                    inspect: true,
+                })
+            })();
         match request {
             Ok(request) => {
                 self.oauth_session = self.bound_oauth(&request.props, saved);
@@ -274,12 +351,14 @@ impl ServerEditor {
             loaded.oauth_session = self.oauth_session.clone();
             loaded.file_path = self.file_path.clone();
             loaded.tab = 3;
-            loaded.message = lang
-                .text(
-                    "Profile imported into this draft. Save applies it; Cancel discards it.",
-                    "Профиль загружен в черновик. Сохраните его, чтобы применить изменения.",
+            loaded.message = if cfg!(windows) {
+                lang.text(
+                    "Profile imported into this draft. Check Remember in Authentication to save imported credentials.",
+                    "Профиль загружен в черновик. Чтобы сохранить импортированные учётные данные, включите запоминание на вкладке «Аутентификация».",
                 )
-                .into();
+            } else {
+                lang.text("Profile imported into this draft. Save the server to apply it.", "Профиль загружен в черновик. Сохраните сервер, чтобы применить изменения.")
+            }.into();
             Ok(loaded)
         })();
         match result {
@@ -306,8 +385,8 @@ impl ServerEditor {
         self.message = match result {
             Ok(()) => lang
                 .text(
-                    "Exported this profile without session credentials",
-                    "Профиль экспортирован без учётных данных сеанса",
+                    "Exported this profile without credentials",
+                    "Профиль экспортирован без учётных данных",
                 )
                 .into(),
             Err(e) => format!(
@@ -410,6 +489,20 @@ impl ReaderApp {
             .unwrap_or_default();
         let mut editor = ServerEditor::new(server, credentials, id.is_none(), topic);
         editor.oauth_session = oauth_session;
+        if cfg!(windows)
+            && let Some(handle) = self
+                .options
+                .store
+                .remembered_credential(&self.workspace, editor.original.id)
+        {
+            editor.use_saved_input(handle, self.credentials.get(&editor.original.id));
+            if self.credential_errors.contains(&editor.original.id) {
+                editor.message = self.language().text(
+                    "Saved credential unavailable. Enter a replacement or uncheck Remember and save to forget it.",
+                    "Сохранённые данные недоступны. Введите новые или снимите флажок запоминания и сохраните сервер.",
+                ).into();
+            }
+        }
         self.server_editor = Some(editor);
     }
     pub(super) fn save_server(&mut self, editor: &ServerEditor) -> Result<(), String> {
@@ -454,14 +547,57 @@ impl ReaderApp {
         if self.persistence_error.is_some() {
             return Err(lang.text("Repair or move the invalid workspace file before saving a server", "Чтобы сохранить сервер, исправьте или переместите повреждённый файл рабочего пространства").into());
         }
-        self.options.store.save(&proposed)?;
+        let mut props = server.properties.clone();
+        props.extend(credentials.clone());
+        let oauth = editor.bound_oauth(&props, self.oauth_sessions.get(&server.id));
+        let store = &self.options.store;
+        let changed_target = store
+            .remembered_credential(&self.workspace, server.id)
+            .is_some_and(|h| !h.same_target(&server));
+        let keep = editor.saved_for(&server, &credentials)
+            && credentials.get(editor.auth_key()) == Some(&editor.saved_secret);
+        let mut save = |latest: Option<&str>| -> Result<Option<RememberedCredential>, String> {
+            let mut selected = credentials.clone();
+            if let Some(token) = latest {
+                selected.insert("oauth.refresh.token".into(), token.into());
+            }
+            let change = if !cfg!(windows) && !changed_target {
+                RememberChange::Keep
+            } else if !editor.remember || !editor.protocol.starts_with("SASL") {
+                RememberChange::Forget
+            } else if keep {
+                RememberChange::Keep
+            } else {
+                if !selected
+                    .get(editor.auth_key())
+                    .is_some_and(|s| !s.is_empty())
+                {
+                    return Err(lang.text(
+                        "Enter the credential to remember or uncheck Remember and save",
+                        "Введите учётные данные для запоминания или снимите флажок и сохраните сервер",
+                    ).into());
+                }
+                RememberChange::Replace(&selected)
+            };
+            store.save_with_credential(&mut proposed, server.id, change)?;
+            Ok(store.remembered_credential(&proposed, server.id))
+        };
+        if editor.mechanism == "OAUTHBEARER" && cfg!(windows) {
+            let commit = |latest: &str| Ok(((), save(Some(latest))?));
+            if editor.remember && !keep {
+                oauth.configure_new_remembered(commit)?;
+            } else {
+                oauth.configure_remembering(commit)?;
+            }
+        } else {
+            save(None)?;
+        }
         let previous = self.active().cloned();
         self.workspace = proposed;
+        self.credential_errors.remove(&server.id);
         self.credentials.insert(server.id, credentials);
         if editor.mechanism == "OAUTHBEARER" {
-            let props = session_properties(&server, &self.credentials);
-            let session = editor.bound_oauth(&props, self.oauth_sessions.get(&server.id));
-            self.oauth_sessions.insert(server.id, session);
+            self.oauth_sessions.insert(server.id, oauth);
         } else {
             self.oauth_sessions.remove(&server.id);
         }
@@ -476,10 +612,7 @@ impl ReaderApp {
             self.view = TopicView::new(&self.workspace.settings);
             self.session = None;
         }
-        self.notice = lang.text(
-            "Server saved. Credentials stay in this session; no connection was started.",
-            "Сервер сохранён. Учётные данные доступны только в этом сеансе. Подключение начнётся по вашей команде.",
-        ).into();
+        self.notice = lang.text("Server saved.", "Сервер сохранён.").into();
         Ok(())
     }
     pub(super) fn native_dialogs(&mut self, ctx: &egui::Context) {
@@ -524,29 +657,53 @@ impl ReaderApp {
                                     ui.label(RichText::new(lang.text("Add more topic names from the server tree after saving.", "После сохранения можно добавить ещё топики в дереве серверов.")).small().color(muted(self.dark())));
                                 }
                                 1 => {
-                                    ui.label(RichText::new(lang.text("Session credentials", "Учётные данные сеанса")).strong());
-                                    ui.label(RichText::new(lang.text("Usernames, passwords and tokens stay in memory and are not saved with your workspace.", "Имена пользователей, пароли и токены хранятся только в памяти до конца сеанса.")).small().color(muted(self.dark())));
-                                    ui.add_space(15.);
                                     ui.label(lang.text("SASL mechanism", "Механизм SASL"));
                                     let refresh_label = lang.text("OAUTHBEARER · Refresh token", "OAUTHBEARER · Токен обновления");
+                                    let before = editor.mechanism.clone();
                                     let selected = if editor.mechanism == "OAUTHBEARER" { refresh_label } else { &editor.mechanism };
                                     egui::ComboBox::from_id_salt("sasl-mechanism").selected_text(selected).width(290.).show_ui(ui, |ui| {
                                         for mechanism in ["PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"] { ui.selectable_value(&mut editor.mechanism, mechanism.into(), mechanism); }
                                         if ui.selectable_value(&mut editor.mechanism, "OAUTHBEARER".into(), refresh_label).changed() {
                                             editor.protocol = "SASL_SSL".into();
                                         }
-                                    }); ui.add_space(13.);
+                                    }); ui.add_space(8.);
+                                    if before != editor.mechanism {
+                                        editor.remember = false;
+                                    }
+                                    if cfg!(windows) {
+                                        let label = if editor.mechanism == "OAUTHBEARER" {
+                                            lang.text("Remember refresh token on this PC", "Запомнить токен обновления на этом ПК")
+                                        } else {
+                                            lang.text("Remember login and password on this PC", "Запомнить логин и пароль на этом ПК")
+                                        };
+                                        ui.add_enabled(editor.protocol.starts_with("SASL") || editor.remember, egui::Checkbox::new(&mut editor.remember, label));
+                                        ui.small(if editor.saved_credential.is_some() {
+                                            lang.text("Clear the checkbox and save the server to forget the stored credential.", "Чтобы удалить сохранённые данные, снимите флажок и сохраните сервер.")
+                                        } else {
+                                            lang.text("Saving protects the selected credential with your Windows account.", "При сохранении выбранные учётные данные защищаются вашей учётной записью Windows.")
+                                        });
+                                    } else {
+                                        ui.small(lang.text("Credentials stay in this session.", "Учётные данные хранятся только в этом сеансе."));
+                                    }
+                                    ui.add_space(8.);
+                                    let secret_hint = if editor.remember && !editor.saved_secret.is_empty() {
+                                        lang.text("Saved for the original connection · enter to replace", "Сохранено для исходного подключения · введите для замены")
+                                    } else if editor.mechanism == "OAUTHBEARER" {
+                                        lang.text("Enter refresh token", "Введите токен обновления")
+                                    } else {
+                                        lang.text("Enter password", "Введите пароль")
+                                    };
                                     if editor.mechanism == "OAUTHBEARER" {
                                         field(ui, lang, lang.text("Token endpoint URL", "URL для получения токена"), &mut editor.oauth_endpoint, "https://sso.example.org/realms/example/protocol/openid-connect/token", false);
                                         field(ui, lang, lang.text("OAuth client ID", "Идентификатор клиента OAuth"), &mut editor.oauth_client, "kafka-cli", false);
-                                        field(ui, lang, lang.text("Refresh token", "Токен обновления"), &mut editor.refresh_token, lang.text("Session only", "Только для этого сеанса"), true);
+                                        field(ui, lang, lang.text("Refresh token", "Токен обновления"), &mut editor.refresh_token, secret_hint, true);
                                         field(ui, lang, lang.text("Maximum access token lifetime (seconds)", "Предельный срок действия токена доступа (секунды)"), &mut editor.max_token_seconds, "300", false);
                                         if editor.protocol != "SASL_SSL" {
                                             ui.colored_label(accent(self.dark()), lang.text("Choose SASL_SSL on Connection to use a refresh token", "Для токена обновления выберите SASL_SSL на вкладке «Подключение»"));
                                         }
                                     } else {
                                         field(ui, lang, lang.text("Username", "Имя пользователя"), &mut editor.username, lang.text("Kafka principal", "Пользователь Kafka"), false);
-                                        field(ui, lang, lang.text("Password", "Пароль"), &mut editor.password, lang.text("Session only", "Только для этого сеанса"), true);
+                                        field(ui, lang, lang.text("Password", "Пароль"), &mut editor.password, secret_hint, true);
                                         if !editor.protocol.starts_with("SASL") { ui.label(RichText::new(lang.text("Choose SASL_SSL or SASL_PLAINTEXT on Connection to use these credentials.", "Чтобы использовать эти данные, выберите SASL_SSL или SASL_PLAINTEXT на вкладке «Подключение».")).color(accent(self.dark()))); }
                                     }
                                 }
@@ -564,7 +721,7 @@ impl ReaderApp {
                                     ui.add_space(14.); ui.separator(); ui.add_space(8.);
                                     field(ui, lang, lang.text("Import / export connection profile", "Импорт и экспорт профиля подключения"), &mut editor.file_path, "server.properties", false);
                                     ui.horizontal(|ui| { if ui.button(lang.text("Import into draft", "Импорт в черновик")).clicked() { editor.import(lang); } if ui.button(lang.text("Export safe profile", "Экспорт без учётных данных")).clicked() { editor.export(lang); } });
-                                    ui.small(lang.text("Imports change this draft only. Export omits session credentials. Existing export files are not overwritten.", "Импорт изменяет только черновик. Для экспорта выберите новый файл. Учётные данные сеанса в него не попадут."));
+                                    ui.small(lang.text("Imports change this draft only. Exports omit credentials and require a new file.", "Импорт изменяет только черновик. Экспорт сохраняет профиль без учётных данных в новый файл."));
                                 }
                             }
                         });
@@ -843,6 +1000,9 @@ fn section(ui: &mut egui::Ui, title: &str, dark: bool) {
 mod tests {
     use super::*;
     fn test_app() -> ReaderApp {
+        app_with_store(Store::for_gui(None, true).unwrap())
+    }
+    fn app_with_store(store: Store) -> ReaderApp {
         let cc = eframe::CreationContext::_new_kittest(egui::Context::default());
         ReaderApp::new(
             &cc,
@@ -854,9 +1014,156 @@ mod tests {
                 smoke: false,
                 reopen: None,
                 close_after: None,
-                store: Store::for_gui(None, true).unwrap(),
+                store,
             },
         )
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn only_the_chosen_credential_reopens_and_forget_requires_save() {
+        for mechanism in ["OAUTHBEARER", "SCRAM-SHA-512", "PLAIN"] {
+            let mut app = test_app();
+            let directory = app.options.store.directory.clone();
+            let reopen = || app_with_store(Store::new(Some(directory.clone())));
+            app.open_server(None);
+            let mut editor = app.server_editor.take().unwrap();
+            assert!(!editor.remember);
+            editor.name = "Protected".into();
+            editor.brokers = "broker.invalid:9093".into();
+            editor.protocol = "SASL_SSL".into();
+            editor.mechanism = mechanism.into();
+            editor.oauth_endpoint = "https://sso.invalid/token".into();
+            editor.username = "USER_SENTINEL".into();
+            editor.password = "PASSWORD_SENTINEL".into();
+            editor.refresh_token = "TOKEN_SENTINEL".into();
+            editor.key_password = "TLS_SENTINEL".into();
+            editor.advanced = "custom.secret=ADVANCED_SENTINEL".into();
+            editor.test_topic = "events".into();
+            app.save_server(&editor).unwrap();
+            let id = editor.original.id;
+            assert!(reopen().credentials.is_empty());
+            app.open_server(Some(id));
+            let mut editor = app.server_editor.take().unwrap();
+            editor.remember = true;
+            app.save_server(&editor).unwrap();
+
+            let mut reopened = reopen();
+            assert!(reopened.session.is_none());
+            let expected = if mechanism == "OAUTHBEARER" {
+                Properties::from([("oauth.refresh.token".into(), "TOKEN_SENTINEL".into())])
+            } else {
+                Properties::from([
+                    ("sasl.username".into(), "USER_SENTINEL".into()),
+                    ("sasl.password".into(), "PASSWORD_SENTINEL".into()),
+                ])
+            };
+            assert_eq!(reopened.credentials.get(&id), Some(&expected));
+            assert!(
+                !fs::read_to_string(reopened.options.store.path())
+                    .unwrap()
+                    .contains("SENTINEL")
+            );
+            reopened.open_server(Some(id));
+            let mut draft = reopened.server_editor.take().unwrap();
+            assert!(draft.remember);
+            assert!(draft.password.is_empty() && draft.refresh_token.is_empty());
+            assert_eq!(draft.build(Language::English).unwrap().1, expected);
+            let path = directory.join("safe-export.properties");
+            draft.file_path = path.to_str().unwrap().into();
+            draft.export(Language::English);
+            assert!(!fs::read_to_string(&path).unwrap().contains("SENTINEL"));
+            draft.import(Language::English);
+            assert!(!draft.remember);
+            assert!(
+                !draft
+                    .build(Language::English)
+                    .unwrap()
+                    .1
+                    .contains_key(draft.auth_key())
+            );
+            drop(draft);
+            assert_eq!(reopen().credentials.get(&id), Some(&expected));
+
+            reopened.open_server(Some(id));
+            let mut edit = reopened.server_editor.take().unwrap();
+            if mechanism == "OAUTHBEARER" {
+                edit.oauth_endpoint = "https://different.invalid/token".into();
+            } else {
+                edit.username = "different".into();
+            }
+            assert!(
+                !edit
+                    .build(Language::English)
+                    .unwrap()
+                    .1
+                    .contains_key(edit.auth_key())
+            );
+            edit.test(Language::English, reopened.oauth_sessions.get(&id));
+            assert!(edit.test.is_none());
+            assert!(reopened.save_server(&edit).is_err());
+            assert_eq!(reopen().credentials.get(&id), Some(&expected));
+
+            reopened.open_server(Some(id));
+            let mut forget = reopened.server_editor.take().unwrap();
+            forget.remember = false;
+            assert_eq!(reopen().credentials.get(&id), Some(&expected));
+            reopened.save_server(&forget).unwrap();
+            assert!(!reopened.credentials[&id].contains_key(forget.auth_key()));
+            let forgotten = reopen();
+            assert!(forgotten.workspace.remembered.is_empty());
+            assert!(forgotten.credentials.is_empty());
+            fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_unreadable_credential_can_be_replaced_or_forgotten() {
+        let mut app = test_app();
+        let directory = app.options.store.directory.clone();
+        let reopen = || app_with_store(Store::new(Some(directory.clone())));
+        let damage_record = || {
+            let path = fs::read_dir(&directory)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|path| path.extension().is_some_and(|ext| ext == "dpapi"))
+                .unwrap();
+            fs::write(path, b"damaged synthetic test credential").unwrap();
+        };
+        app.open_server(None);
+        let mut editor = app.server_editor.take().unwrap();
+        editor.name = "Damaged record".into();
+        editor.brokers = "broker.invalid:9093".into();
+        editor.protocol = "SASL_SSL".into();
+        editor.username = "original user".into();
+        editor.password = "original password".into();
+        editor.test_topic = "events".into();
+        editor.remember = true;
+        app.save_server(&editor).unwrap();
+        let id = editor.original.id;
+        damage_record();
+        let mut reopened = reopen();
+        assert!(reopened.properties().is_err());
+        reopened.open_server(Some(id));
+        let mut replace = reopened.server_editor.take().unwrap();
+        assert!(!replace.message.is_empty());
+        assert!(replace.remember && replace.password.is_empty());
+        assert!(reopened.save_server(&replace).is_err());
+        replace.username = "replacement user".into();
+        replace.password = "replacement password".into();
+        reopened.save_server(&replace).unwrap();
+        assert_eq!(
+            reopen().properties().unwrap()["sasl.password"],
+            "replacement password"
+        );
+        damage_record();
+        let mut reopened = reopen();
+        reopened.open_server(Some(id));
+        let mut forget = reopened.server_editor.take().unwrap();
+        forget.remember = false;
+        reopened.save_server(&forget).unwrap();
+        assert!(reopen().workspace.remembered.is_empty());
     }
 
     #[test]

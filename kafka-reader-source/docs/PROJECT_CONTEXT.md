@@ -1,6 +1,6 @@
 # Project context and current state
 
-Snapshot: **23 November 2026**, application **0.5.0**. This is the durable
+Snapshot: **23 November 2026**, application **0.6.0**. This is the durable
 handoff for future development. Read the current code when making changes;
 update this document when an accepted decision or verified capability changes.
 
@@ -71,11 +71,17 @@ Version 0.4.0 added the Russian interface and system language detection,
 protected concurrent workspace saves and fixed several exact-topic read and
 export edge cases. Its Windows executable carries Alexey Militskiy's self-signed
 Authenticode certificate with a DigiCert timestamp. See the
-[changelog](../CHANGELOG.md) and [signature details](../QUICKSTART.md#verify-the-windows-download).
+[changelog](../CHANGELOG.md) and the historical verification report.
 
 Version 0.5.0 adds OS clipboard access and refresh-token authentication for
 public OAuth clients. An OAuth token exchange runs only when the user tests or
 reads a topic. PLAIN and SCRAM remain available on password-based listeners.
+
+Version 0.6.0 adds opt-in per-server storage for SASL logins/passwords and
+OAuth refresh tokens under the current Windows user's DPAPI key. The
+credential reference is local to the workspace. Profile exports omit secrets
+and storage references. Clearing the option and saving removes the stored
+credential. Startup still makes no network requests.
 
 Old sample profiles are removed using their `offline` marker when a saved
 workspace is loaded. The cleaned state reaches disk on the next normal save.
@@ -90,7 +96,7 @@ startup. The empty/reopened screenshots show ordinary behavior.
 
 ## Verification baseline and limits
 
-For version 0.5.0, consult the [release test report](../TEST-REPORT.md).
+For version 0.6.0, consult the [release test report](../TEST-REPORT.md).
 
 The delivered 0.3.0 release has recorded results for **33 unit tests, 9
 self-checks, 47 GUI assertions, 15 reopen assertions and 12 independent
@@ -122,7 +128,7 @@ Other current limits:
 - Enterprise SSO, mTLS and SCRAM broker configurations require environment-specific verification.
 - No Schema Registry integration, Avro/Protobuf schema decoding or
   Kerberos support is implemented.
-- No credential vault/keychain persistence, updater or installer.
+- Linux uses session credentials. There is no updater or installer.
 - No macOS/ARM release, broad accessibility/high-DPI certification, or prolonged
   throughput/memory-soak acceptance test.
 - Native GUI checks use application hooks plus independent window, framebuffer

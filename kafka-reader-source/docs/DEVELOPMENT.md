@@ -1,7 +1,7 @@
 # Development, verification, and packaging
 
 Use these commands from the project root unless a section changes directory.
-They describe the **0.5.0** source layout. Check the current files when updating
+They describe the **0.6.0** source layout. Check the current files when updating
 versions or build targets. [TEST-REPORT.md](../TEST-REPORT.md) is the record of
 what actually ran for the delivered release.
 
@@ -31,9 +31,9 @@ its self-test and packaging, so leave that override unset when using it.
 
 ## Linux build and local run
 
-The [README build section](../README.md#build-from-source) lists the development
-packages. A typical Debian/Ubuntu setup includes `build-essential`, `cmake`,
-`pkg-config`, `perl`, the X11 development packages, `libxkbcommon-dev`, and
+A typical Debian/Ubuntu setup includes `build-essential`, `cmake`,
+`pkg-config`, `perl`, `libx11-dev`, `libxrandr-dev`, `libxi-dev`,
+`libxcursor-dev`, `libxinerama-dev`, `libxkbcommon-dev`, and
 `libgl1-mesa-dev`. Python 3 is needed for packaging. Install prerequisites using
 the environment's normal package-management process.
 
@@ -86,7 +86,7 @@ $check = Start-Process -Wait -PassThru -NoNewWindow `
   -ArgumentList '--self-test'
 if ($check.ExitCode -ne 0) { throw 'Kafka Reader self-test failed' }
 
-.\dist\v0.5.0\kafka-reader.exe --data-dir "$env:TEMP\kafka-reader-dev-workspace"
+.\dist\v0.6.0\kafka-reader.exe --data-dir "$env:TEMP\kafka-reader-dev-workspace"
 ```
 
 The build script sets the required native-library environment before invoking
@@ -105,7 +105,7 @@ rustup target add x86_64-pc-windows-gnu
 
 The internal output is
 `target/x86_64-pc-windows-gnu/release/kafka-reader-rust.exe`; the portable output
-is `dist/v0.5.0/kafka-reader.exe`.
+is `dist/v0.6.0/kafka-reader.exe`.
 
 Keep [.cargo/config.toml](../.cargo/config.toml), [build.rs](../build.rs), and
 the static features in [Cargo.toml](../Cargo.toml). They supply static GNU
@@ -117,7 +117,7 @@ distribution model.
 For import inspection, a MinGW binutils environment can use:
 
 ```bash
-x86_64-w64-mingw32-objdump -p dist/v0.5.0/kafka-reader.exe
+x86_64-w64-mingw32-objdump -p dist/v0.6.0/kafka-reader.exe
 ```
 
 Review the imported DLL names for unexpected third-party runtimes. An OS-only
@@ -224,7 +224,7 @@ For an existing pair of binaries built in the default target directories:
 python3 packaging/package.py \
   --linux-exe target/release/kafka-reader-rust \
   --windows-exe target/x86_64-pc-windows-gnu/release/kafka-reader-rust.exe \
-  --out dist/v0.5.0
+  --out dist/v0.6.0
 ```
 
 The packager lists the shipped integration fixture files in `FIXTURE_FILES`.
@@ -236,9 +236,13 @@ binaries with the hashes in the corresponding test reports.
 
 ## Release versioning
 
+Write the GitHub release description in Russian. Include only user-facing
+features and behavior changes. Keep checks, hashes and signature details in the
+release evidence.
+
 Assign a new `MAJOR.MINOR.PATCH` version to each application release. Use a
-patch bump for fixes and a minor bump for new features. After `0.5.0`, the
-next fix-only release is `0.5.1` and the next feature release is `0.6.0`.
+patch bump for fixes and a minor bump for new features. After `0.6.0`, the
+next fix-only release is `0.6.1` and the next feature release is `0.7.0`.
 For incompatible changes during `0.x`, increment the
 minor version and explain the migration in the changelog. From `1.0.0`
 onward, use a major bump for incompatible changes.

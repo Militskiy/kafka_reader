@@ -1,6 +1,7 @@
 use crate::{
     model::Properties,
     oauth::{Grant, RefreshClient},
+    remembered::RememberedCredential,
 };
 use crossbeam_channel::{TryRecvError, bounded};
 use rdkafka::{
@@ -25,7 +26,17 @@ struct RefreshCredential {
     endpoint: String,
     client_id: String,
     original: String,
-    rotated: Mutex<Option<String>>,
+    // Only workers take this lock across a network request.
+    exchange_lock: Mutex<()>,
+    state: Mutex<RefreshState>,
+}
+
+#[derive(Default)]
+struct RefreshState {
+    latest: Option<String>,
+    remembered: Option<RememberedCredential>,
+    /// Previous on-disk token if writing its replacement failed after a successful grant.
+    pending_from: Option<String>,
 }
 
 impl RefreshCredential {
@@ -33,12 +44,48 @@ impl RefreshCredential {
         &self,
         request: impl FnOnce(&str) -> Result<Grant, String>,
     ) -> Result<OAuthToken, String> {
-        // A draft test and an active reader can share a rotating token. Only one
-        // grant may spend that token at a time. No UI operation takes this lock.
-        let mut rotated = self.rotated.lock().unwrap();
-        let grant = request(rotated.as_deref().unwrap_or(&self.original))?;
+        // A draft test and an active reader can share a single-use refresh token.
+        let _exchange = self.exchange_lock.lock().unwrap();
+        let (current, _saved_exchange) = {
+            let mut state = self.state.lock().unwrap();
+            // Another application instance can open the same remembered profile.
+            // Keep this generation's grant lease until the successor is persisted.
+            let lease = state
+                .remembered
+                .as_ref()
+                .map(|s| s.lock_refresh())
+                .transpose()?;
+            if let Some(slot) = &state.remembered {
+                if let (Some(previous), Some(latest)) = (&state.pending_from, &state.latest) {
+                    slot.rotate(previous, latest)?;
+                }
+                // A different reader process may have renewed it since our last request.
+                let token = slot
+                    .load()?
+                    .remove("oauth.refresh.token")
+                    .ok_or("The remembered profile has no refresh token")?;
+                state.latest = Some(token);
+                state.pending_from = None;
+            }
+            (
+                state.latest.as_ref().unwrap_or(&self.original).clone(),
+                lease,
+            )
+        };
+        let grant = request(&current)?;
         if let Some(next) = grant.refresh_token {
-            *rotated = Some(next);
+            let mut state = self.state.lock().unwrap();
+            // The provider already spent the old token. Keep its successor in memory
+            // even if DPAPI or the workspace write fails.
+            let result = state
+                .remembered
+                .as_ref()
+                .map(|slot| slot.rotate(&current, &next));
+            state.latest = Some(next);
+            if let Some(Err(error)) = result {
+                state.pending_from = Some(current);
+                return Err(format!("Could not save the rotated refresh token: {error}"));
+            }
         }
         Ok(OAuthToken {
             token: grant.access_token,
@@ -91,8 +138,41 @@ impl OAuthSession {
             endpoint: endpoint.into(),
             client_id: client_id.into(),
             original: original.into(),
-            rotated: Mutex::default(),
+            exchange_lock: Mutex::default(),
+            state: Mutex::default(),
         }));
+    }
+
+    /// Publish a new rotation target only after an in-flight grant has finished.
+    /// Otherwise another process could spend its saved token before that grant returns.
+    pub fn configure_new_remembered<T>(
+        &self,
+        save: impl FnOnce(&str) -> Result<(T, Option<RememberedCredential>), String>,
+    ) -> Result<T, String> {
+        let credential = self.0.as_ref().ok_or("OAuth refresh is not configured")?;
+        let _exchange = credential
+            .exchange_lock
+            .try_lock()
+            .map_err(|_| "Token refresh is in progress. Try saving again when it finishes.")?;
+        self.configure_remembering(save)
+    }
+
+    /// Keep, restore or forget a rotation target. A grant in flight observes the
+    /// updated target when it returns. The callback must not make network requests.
+    pub fn configure_remembering<T>(
+        &self,
+        save: impl FnOnce(&str) -> Result<(T, Option<RememberedCredential>), String>,
+    ) -> Result<T, String> {
+        let credential = self.0.as_ref().ok_or("OAuth refresh is not configured")?;
+        let mut state = credential.state.lock().unwrap();
+        let (result, remembered) = save(state.latest.as_deref().unwrap_or(&credential.original))?;
+        if state.remembered != remembered {
+            // A newly saved slot already contains the snapshot; an unchanged slot
+            // may still need to retry a previously failed compare-and-swap.
+            state.pending_from = None;
+        }
+        state.remembered = remembered;
+        Ok(result)
     }
 }
 
@@ -329,6 +409,119 @@ mod tests {
             .unwrap()
             .exchange(|token| {
                 assert_eq!(token, "new refresh");
+                grant(None)
+            })
+            .unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn remember_the_latest_grant_and_forget_during_renewal() {
+        use crate::{
+            remembered::RememberChange,
+            workspace::{Server, Store, Workspace},
+        };
+        let store = Store::for_gui(None, true).unwrap();
+        let mut workspace = store.load().unwrap();
+        let mut props = profile();
+        props.insert("bootstrap.servers".into(), "qa.invalid:9093".into());
+        let mut public = props.clone();
+        public.remove("oauth.refresh.token");
+        workspace.servers.push(Server {
+            id: 1,
+            name: "QA".into(),
+            offline: false,
+            properties: public,
+            topics: vec![],
+        });
+        workspace.selected_server = 1;
+        let mut session = OAuthSession::default();
+        session.bind(&props);
+        let credential = session.0.as_ref().unwrap();
+        // Testing the draft consumed the initial token before remember was selected.
+        credential
+            .exchange(|_| {
+                assert!(
+                    session
+                        .configure_new_remembered::<()>(|_| panic!("published an in-flight token"))
+                        .is_err()
+                );
+                grant(Some("after-test"))
+            })
+            .unwrap();
+        let slot = session
+            .configure_new_remembered(|token| {
+                assert_eq!(token, "after-test");
+                let secrets = Properties::from([("oauth.refresh.token".into(), token.into())]);
+                store.save_with_credential(&mut workspace, 1, RememberChange::Replace(&secrets))?;
+                let slot = store.remembered_credential(&workspace, 1).unwrap();
+                Ok((slot.clone(), Some(slot)))
+            })
+            .unwrap();
+        credential
+            .exchange(|token| {
+                assert_eq!(token, "after-test");
+                grant(Some("after-read"))
+            })
+            .unwrap();
+        assert_eq!(slot.load().unwrap()["oauth.refresh.token"], "after-read");
+
+        // A new process can spend a rotation written by the receiver of the grant.
+        let reopened_store = Store::new(Some(store.directory.clone()));
+        let reopened: Workspace = reopened_store.load().unwrap();
+        let reopened_slot = reopened_store.remembered_credential(&reopened, 1).unwrap();
+        reopened_slot
+            .rotate("after-read", "from-another-instance")
+            .unwrap();
+        let (started, request_started) = bounded(1);
+        let (release, send_grant) = bounded(1);
+        thread::scope(|scope| {
+            let task = scope.spawn(move || {
+                credential.exchange(|token| {
+                    assert_eq!(token, "from-another-instance");
+                    started.send(()).unwrap();
+                    send_grant.recv_timeout(Duration::from_secs(5)).unwrap();
+                    grant(Some("session-only-again"))
+                })
+            });
+            request_started
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap();
+            // The grant currently in flight owns the shared on-disk generation.
+            let mut peer = OAuthSession::default();
+            peer.bind(&props);
+            peer.configure_remembering(|_| Ok(((), Some(reopened_slot.clone()))))
+                .unwrap();
+            assert!(
+                peer.0
+                    .as_ref()
+                    .unwrap()
+                    .exchange(|_| { panic!("concurrent grant spent a remembered token twice") })
+                    .is_err()
+            );
+            session
+                .configure_remembering(|token| {
+                    assert_eq!(token, "from-another-instance");
+                    store.save_with_credential(&mut workspace, 1, RememberChange::Forget)?;
+                    Ok(((), None))
+                })
+                .unwrap();
+            release.send(()).unwrap();
+            task.join().unwrap().unwrap();
+        });
+        assert!(slot.load().is_err());
+        assert!(reopened_store.load().unwrap().remembered.is_empty());
+        assert!(
+            store
+                .directory
+                .read_dir()
+                .unwrap()
+                .flatten()
+                .all(|e| { e.path().extension().is_none_or(|ext| ext != "dpapi") })
+        );
+        credential
+            .exchange(|token| {
+                assert_eq!(token, "session-only-again");
                 grant(None)
             })
             .unwrap();

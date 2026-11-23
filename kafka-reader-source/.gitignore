@@ -6,3 +6,5 @@
 *.jsonl
 *.log
 kafka-rust-profile.properties
+credential-*.dpapi
+credential-*.refresh.lock

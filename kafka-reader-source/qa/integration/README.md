@@ -21,7 +21,7 @@ python3 run-integration.py --app rust --exe /absolute/path/to/kafka-reader-rust
 
 On Windows, set `JAVA_HOME` to a JDK 21+ installation. From this directory,
 run `mvn.cmd dependency:build-classpath "-Dmdep.outputFile=broker-classpath.txt"`,
-then `python run-integration.py --app rust --exe ..\..\dist\v0.5.0\kafka-reader.exe`.
+then `python run-integration.py --app rust --exe ..\..\dist\v0.6.0\kafka-reader.exe`.
 
 Add `--oauth` to exercise refresh tokens. This also requires `openssl` on
 `PATH`. The fixture creates a temporary CA, a loopback HTTPS token endpoint,
@@ -46,7 +46,7 @@ From the project root, supply the built executable, the path to your copy of
 `sondahub-bridge.mjs`, and an exact topic containing at least one readable record.
 
 ```powershell
-python qa/integration/run-bridge-check.py --exe .\dist\v0.5.0\kafka-reader.exe --bridge-script "$env:USERPROFILE\sondahub-bridge.mjs" --topic fleet.telemetry
+python qa/integration/run-bridge-check.py --exe .\dist\v0.6.0\kafka-reader.exe --bridge-script "$env:USERPROFILE\sondahub-bridge.mjs" --topic fleet.telemetry
 ```
 
 The check uses `npx.cmd --yes --package=node@22` to locate Node 22, starts the

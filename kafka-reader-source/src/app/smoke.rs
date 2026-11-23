@@ -88,7 +88,6 @@ impl ReaderApp {
                     self.session.is_none(),
                     "Reopening must never connect or read"
                 );
-                assert!(self.credentials.is_empty(), "Credentials must not reload");
                 assert!(
                     self.view.buffer.records.is_empty(),
                     "Message bodies must not reload"
@@ -100,6 +99,19 @@ impl ReaderApp {
                 );
                 let server = &self.workspace.servers[0];
                 assert_eq!(server.name, "QA development");
+                if cfg!(windows) {
+                    assert!(self.workspace.remembered.contains_key(&server.id));
+                    assert_eq!(
+                        self.credentials.get(&server.id),
+                        Some(&Properties::from([
+                            ("sasl.username".into(), "qa-reader".into()),
+                            ("sasl.password".into(), SECRET.into()),
+                        ]))
+                    );
+                } else {
+                    assert!(self.credentials.is_empty());
+                }
+                assert!(self.credential_errors.is_empty());
                 assert!(!server.offline, "The synthetic QA server must not persist");
                 assert!(
                     server
@@ -120,10 +132,10 @@ impl ReaderApp {
                 assert_eq!(self.workspace.tabs.len(), 2);
                 assert!(self.workspace.tabs.iter().all(|t| t.server == server.id));
                 assert!(self.active().is_some_and(|t| t.server == server.id));
-                self.smoke.checks = 17;
+                self.smoke.checks = if cfg!(windows) { 19 } else { 18 };
                 self.smoke.done = true;
                 self.phase("reopened", "main", "Kafka Reader");
-                let report = serde_json::json!({"guiReopen":"PASS","checks":self.smoke.checks,"language":self.workspace.settings.language,"sessionStarted":false,"credentialsRestored":false,"recordsRestored":0,"offlineServersRestored":0,"realServersRestored":1,"appVersion":env!("CARGO_PKG_VERSION")});
+                let report = serde_json::json!({"guiReopen":"PASS","checks":self.smoke.checks,"language":self.workspace.settings.language,"sessionStarted":false,"credentialsRestored":cfg!(windows),"sessionOnlyCredentialsRestored":false,"recordsRestored":0,"offlineServersRestored":0,"realServersRestored":1,"appVersion":env!("CARGO_PKG_VERSION")});
                 let directory = self.options.reopen.as_ref().unwrap();
                 atomic_write(
                     &directory.join("gui-reopen-report.json"),
@@ -337,6 +349,7 @@ impl ReaderApp {
                 editor.test_topic = "orders.events".into();
                 editor.username = "qa-reader".into();
                 editor.password = SECRET.into();
+                editor.remember = cfg!(windows);
                 editor.key_password = SECRET.into();
                 editor.ca = "C:/certs/ca.pem".into();
                 editor.certificate = "C:/certs/client.pem".into();

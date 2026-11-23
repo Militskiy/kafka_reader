@@ -1154,7 +1154,7 @@ dependencies = [
 
 [[package]]
 name = "kafka-reader-rust"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "arboard",
  "base64 0.22.1",
@@ -1166,6 +1166,7 @@ dependencies = [
  "serde",
  "serde_json",
  "ureq",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -111,6 +111,68 @@ impl Language {
                 "Брокер Kafka отклонил аутентификацию OAuth. Проверьте адрес и порт брокера и назначение токена (audience)"
             }
             "OAuth refresh is not configured" => "Обновление токена OAuth не настроено",
+            "The remembered profile has no refresh token" => {
+                "В сохранённых учётных данных нет токена обновления"
+            }
+            "Could not lock the remembered refresh token" => {
+                "Не удалось получить исключительный доступ к сохранённому токену обновления"
+            }
+            "Another session is refreshing this saved token. Retry the connection." => {
+                "Другой сеанс обновляет этот сохранённый токен. Повторите подключение."
+            }
+            "Token refresh is in progress. Try saving again when it finishes." => {
+                "Токен обновляется. Повторите сохранение после завершения обновления."
+            }
+            "Choose SASL authentication to remember a credential" => {
+                "Чтобы запомнить учётные данные, выберите аутентификацию SASL"
+            }
+            "Enter the Kafka username to remember the password" => {
+                "Чтобы запомнить пароль, введите имя пользователя Kafka"
+            }
+            "Enter the password to remember" => "Введите пароль, который нужно запомнить",
+            "Enter the refresh token to remember" => {
+                "Введите токен обновления, который нужно запомнить"
+            }
+            "Remembering a refresh token requires SASL_SSL, a client ID and a saved HTTPS endpoint without a query" => {
+                "Для запоминания токена нужны SASL_SSL, идентификатор клиента и сохранённый HTTPS-адрес без параметров запроса"
+            }
+            "Unsupported mechanism for a remembered credential" => {
+                "Для этого механизма нельзя запомнить учётные данные"
+            }
+            "The remembered credential changed. Reopen the server before using it." => {
+                "Сохранённые учётные данные изменились. Откройте сервер заново."
+            }
+            "Could not unlock the remembered credential for this Windows account and connection." => {
+                "Не удалось расшифровать учётные данные для этой учётной записи Windows и этого подключения."
+            }
+            "Could not create remembered credential" => "Не удалось сохранить учётные данные",
+            "Could not encode remembered credential" => {
+                "Не удалось подготовить учётные данные к сохранению"
+            }
+            "Could not lock remembered credentials" => {
+                "Не удалось получить исключительный доступ к сохранённым учётным данным"
+            }
+            "Could not remove the previous remembered credential" => {
+                "Не удалось удалить ранее сохранённые учётные данные"
+            }
+            "Credential data exceeds the DPAPI limit" | "Credential is too large to remember" => {
+                "Размер учётных данных превышает допустимый предел"
+            }
+            "Enter the credential again or forget it after changing the connection" => {
+                "После изменения подключения введите учётные данные ещё раз или удалите сохранённые данные"
+            }
+            "Remembered credentials require Windows DPAPI" => {
+                "Для запоминания учётных данных требуется Windows DPAPI"
+            }
+            "Windows could not allocate a credential reference" => {
+                "Windows не удалось создать идентификатор сохранённых учётных данных"
+            }
+            "Windows could not protect the credential for this account" => {
+                "Windows не удалось зашифровать учётные данные для этой учётной записи"
+            }
+            "Invalid remembered credential reference" => {
+                "Некорректная ссылка на сохранённые учётные данные"
+            }
             "OAuth token endpoint timed out" => "Сервер авторизации OAuth не ответил вовремя",
             "OAuth token endpoint TLS verification or handshake failed" => {
                 "Не удалось установить защищённое TLS-соединение с сервером авторизации OAuth"
@@ -203,6 +265,13 @@ impl Language {
 }
 
 fn diagnostic_with_values(message: &str) -> String {
+    let reason = message.trim_start_matches("Could not save the rotated refresh token: ");
+    if reason.len() < message.len() {
+        return format!(
+            "Не удалось сохранить новый токен обновления: {}",
+            Language::Russian.message(reason)
+        );
+    }
     for (prefix, translated) in [
         (
             "OAuth token endpoint returned HTTP ",
@@ -318,6 +387,12 @@ mod tests {
         assert_eq!(
             Language::Russian.message("OAuth token endpoint returned HTTP 401"),
             "Сервер авторизации OAuth вернул код HTTP 401"
+        );
+        assert_eq!(
+            Language::Russian.message(
+                "Could not save the rotated refresh token: Could not lock remembered credentials"
+            ),
+            "Не удалось сохранить новый токен обновления: Не удалось получить исключительный доступ к сохранённым учётным данным"
         );
         assert_eq!(
             Language::Russian.message("Native text 123"),
