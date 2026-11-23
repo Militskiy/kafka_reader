@@ -1,5 +1,7 @@
 use crate::direct_consumer::{DirectConsumer, Poll, metadata_guard_available};
 use crate::model::*;
+pub use crate::oauth_context::OAuthSession;
+use crate::oauth_context::ReaderContext;
 use crossbeam_channel::{Receiver, SendTimeoutError, Sender, TryRecvError, bounded};
 use rdkafka::{
     ClientConfig, Offset, TopicPartitionList,
@@ -40,9 +42,13 @@ pub struct Session {
 }
 impl Session {
     pub fn start(request: Request) -> Self {
-        Self::start_with_capacity(request, 256)
+        Self::start_with_oauth(request, &mut OAuthSession::default())
     }
-    fn start_with_capacity(request: Request, capacity: usize) -> Self {
+    pub fn start_with_oauth(request: Request, credentials: &mut OAuthSession) -> Self {
+        credentials.bind(&request.props);
+        Self::start_with_capacity(request, 256, credentials.clone())
+    }
+    fn start_with_capacity(request: Request, capacity: usize, credentials: OAuthSession) -> Self {
         let (tx, rx) = bounded(capacity);
         // The outcome must survive backpressure on the record queue.
         let (finished_tx, terminal) = bounded(1);
@@ -54,7 +60,7 @@ impl Session {
                 let result = if request.demo {
                     demo(&request, &tx, &ctl)
                 } else {
-                    real(&request, &tx, &ctl)
+                    real(&request, &tx, &ctl, credentials)
                 };
                 let state = if ctl.stop.load(Ordering::Acquire) {
                     (
@@ -184,6 +190,7 @@ pub fn safe_properties(source: &Properties) -> Properties {
     let mut p = Properties::new();
     for (k, v) in source {
         if !k.starts_with("reader.")
+            && !k.starts_with("oauth.")
             && !matches!(
                 k.as_str(),
                 "group.id"
@@ -236,6 +243,19 @@ pub fn safe_properties(source: &Properties) -> Properties {
             .remove("sasl.mechanism")
             .or_else(|| p.get("sasl.mechanisms").cloned())
             .unwrap_or_else(|| "PLAIN".into());
+        if mechanism.eq_ignore_ascii_case("OAUTHBEARER") {
+            // The application supplies access tokens via the native callback.
+            p.retain(|k, _| {
+                !k.starts_with("sasl.oauthbearer.")
+                    && !matches!(
+                        k.as_str(),
+                        "enable.sasl.oauthbearer.unsecure.jwt"
+                            | "enable_sasl_queue"
+                            | "sasl.username"
+                            | "sasl.password"
+                    )
+            });
+        }
         p.insert("sasl.mechanisms".into(), mechanism.to_ascii_uppercase());
     }
     p
@@ -250,7 +270,12 @@ fn timeout(deadline: Instant) -> Result<Duration, String> {
     }
 }
 
-fn real(req: &Request, tx: &Sender<Event>, ctl: &Control) -> Result<String, String> {
+fn real(
+    req: &Request,
+    tx: &Sender<Event>,
+    ctl: &Control,
+    credentials: OAuthSession,
+) -> Result<String, String> {
     if !metadata_guard_available() {
         return Err("This build lacks the Kafka Metadata v4 safety guard; use the Linux or Windows GNU build".into());
     }
@@ -265,18 +290,19 @@ fn real(req: &Request, tx: &Sender<Event>, ctl: &Control) -> Result<String, Stri
         return Err("Enter bootstrap.servers as host:port".into());
     }
     if req.props.contains_key("sasl.jaas.config") {
-        return Err("This is a librdkafka client. Replace Java sasl.jaas.config with sasl.username and sasl.password in session properties.".into());
+        return Err("Choose username/password or OAuth refresh token in Authentication. Java sasl.jaas.config is not supported.".into());
     }
     let p = safe_properties(&req.props);
     if p.get("security.protocol")
         .is_some_and(|v| v.to_ascii_uppercase().starts_with("SASL"))
         && !matches!(
             p.get("sasl.mechanisms").map(String::as_str),
-            Some("PLAIN" | "SCRAM-SHA-256" | "SCRAM-SHA-512")
+            Some("PLAIN" | "SCRAM-SHA-256" | "SCRAM-SHA-512" | "OAUTHBEARER")
         )
     {
         return Err(
-            "This prototype supports only SASL PLAIN, SCRAM-SHA-256 and SCRAM-SHA-512".into(),
+            "Supported SASL mechanisms are PLAIN, SCRAM-SHA-256, SCRAM-SHA-512 and OAUTHBEARER"
+                .into(),
         );
     }
     state(tx, ctl, "CONNECTING", "Inspecting only the supplied topic…");
@@ -284,9 +310,22 @@ fn real(req: &Request, tx: &Sender<Event>, ctl: &Control) -> Result<String, Stri
     for (k, v) in &p {
         config.set(k, v);
     }
-    let consumer: BaseConsumer = config
-        .create()
+    let context = ReaderContext::new(credentials, &req.props)?;
+    let consumer: BaseConsumer<ReaderContext> = config
+        .create_with_context(context)
         .map_err(|e| format!("Invalid Kafka configuration: {e}"))?;
+    ReaderContext::with_token_refresh(&consumer, || read_topic(req, tx, ctl, &consumer))
+}
+
+fn read_topic(
+    req: &Request,
+    tx: &Sender<Event>,
+    ctl: &Control,
+    consumer: &BaseConsumer<ReaderContext>,
+) -> Result<String, String> {
+    if ctl.stop.load(Ordering::Acquire) {
+        return Ok("Stopped".into());
+    }
     let deadline = Instant::now() + Duration::from_secs(20);
     let metadata = consumer
         .fetch_metadata(Some(&req.topic), timeout(deadline)?)
@@ -378,7 +417,7 @@ fn real(req: &Request, tx: &Sender<Event>, ctl: &Control) -> Result<String, Stri
     }
     // A high-level assignment with group.id triggers coordinator requests. The
     // low-level partition queue is deliberately group-free and uses absolute starts.
-    let direct = DirectConsumer::new(&consumer, &req.topic, &positions)?;
+    let direct = DirectConsumer::new(consumer, &req.topic, &positions)?;
     state(
         tx,
         ctl,
@@ -404,6 +443,12 @@ fn real(req: &Request, tx: &Sender<Event>, ctl: &Control) -> Result<String, Stri
     loop {
         if ctl.stop.load(Ordering::Acquire) {
             break;
+        }
+        if consumer.context().uses_oauth() {
+            consumer.context().check_refresh()?;
+        } else {
+            // The direct partition queue owns data; this serves main-queue events.
+            consumer.poll(Duration::ZERO);
         }
         if !req.follow && finished.len() == bounds.len() {
             break;
@@ -618,6 +663,7 @@ mod tests {
                 ..request()
             },
             1,
+            OAuthSession::default(),
         );
         let deadline = Instant::now() + Duration::from_secs(5);
         while session.running() {
@@ -664,7 +710,7 @@ mod tests {
             ..request()
         };
         let (tx, _rx) = bounded(4);
-        let error = real(&req, &tx, &Control::default()).unwrap_err();
+        let error = real(&req, &tx, &Control::default(), OAuthSession::default()).unwrap_err();
         assert!(error.contains("Metadata v4"), "{error}");
         // The mock auto-creates a named topic for Metadata v0-v3. Creation
         // succeeds here only if our inspection never reached it by name.
@@ -707,6 +753,26 @@ mod tests {
         let applied = safe_properties(&props);
         assert_eq!(applied["sasl.mechanisms"], "SCRAM-SHA-512");
         assert!(!applied.contains_key("sasl.mechanism"));
+    }
+
+    #[test]
+    fn refresh_credentials_never_enter_native_kafka_properties() {
+        let props = parse_properties("security.protocol=SASL_SSL\nsasl.mechanism=oauthbearer\noauth.token.endpoint.uri=https://id.example/token\noauth.refresh.token=example\noauth.client.id=test\noauth.max.token.expiry.seconds=300\nsasl.username=old\nsasl.password=old\nsasl.oauthbearer.method=oidc\nenable.sasl.oauthbearer.unsecure.jwt=true").unwrap();
+        let safe = safe_properties(&props);
+        assert_eq!(safe["sasl.mechanisms"], "OAUTHBEARER");
+        assert!(
+            !safe
+                .keys()
+                .any(|k| k.starts_with("oauth.") || k.starts_with("sasl.oauthbearer."))
+        );
+        for k in [
+            "sasl.username",
+            "sasl.password",
+            "enable.sasl.oauthbearer.unsecure.jwt",
+            "group.id",
+        ] {
+            assert!(!safe.contains_key(k), "{k}");
+        }
     }
 
     #[test]

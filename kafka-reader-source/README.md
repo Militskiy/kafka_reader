@@ -1,11 +1,11 @@
-# Kafka Reader — 0.4.0
+# Kafka Reader — 0.5.0
 
 A native desktop prototype for inspecting one Kafka topic when you have broker
 and topic access but no Kafka web UI. The interface is Rust **egui/eframe** with an
 OpenGL renderer. The Kafka engine uses **rust-rdkafka / librdkafka**. There is no
 browser view, Java runtime or .NET runtime.
 
-Version 0.4.0 is available as a portable Windows x64 executable and as source
+Version 0.5.0 is available as a portable Windows x64 executable and as source
 for Windows and Linux. See the [quick start](QUICKSTART.md).
 
 ## Continue development in Codex
@@ -55,7 +55,8 @@ uses a restrained amber accent; a light theme is also available.
 1. Choose **+ Add server**. This opens a separate native window.
 2. **Connection** contains the server name, bootstrap addresses, protocol and
    exact topic to test/register. **Authentication** contains the SASL mechanism,
-   username and password. **TLS** contains PEM certificate/key paths and a key
+   username/password or OAuth refresh-token settings. Ctrl+V and the paste
+   buttons work in the server editor. **TLS** contains PEM certificate/key paths and a key
    password. **Advanced** accepts additional native `key=value` properties and
    imports/exports profiles.
 3. **Test exact topic** checks that topic in the background. **Save server**
@@ -142,7 +143,7 @@ is reported and left intact; repair or move it and restart to resume saving.
 - Imports literal UTF-8 `key=value` profiles and saves profiles with secrets
   omitted. Profile and export operations use editable file paths in this prototype.
 - Supports PLAINTEXT, SSL, SASL_PLAINTEXT and SASL_SSL; PLAIN, SCRAM-SHA-256 and
-  SCRAM-SHA-512 are available. PEM CA and client certificates use native
+  SCRAM-SHA-512 are available, along with OAUTHBEARER over SASL_SSL. PEM CA and client certificates use native
   librdkafka configuration keys.
 
 ### A truly group-free reader
@@ -244,27 +245,29 @@ matches the companion Java and C# prototype export contract.
 
 ## Connection profiles
 
-See `examples/local.properties`, `examples/sasl-ssl.properties` and
-`examples/tls-client-certificate.properties`. Profiles and advanced options use
+See `examples/local.properties`, `examples/sasl-ssl.properties`,
+`examples/oauth-refresh.properties` and `examples/tls-client-certificate.properties`. Profiles and advanced options use
 native librdkafka property names, **not Java `sasl.jaas.config`** or Java keystore
 properties. Java JAAS input gets an actionable error. Values are literal UTF-8;
 there are no Java backslash escapes or line continuations. Comments begin with
 `#` or `!`. Use PEM file paths for TLS material. One property goes on each line.
 
-The protocol/username/password fields in the dialog take precedence over matching
-advanced options when populated. Usernames and passwords remain in session
-memory; there is no OS keychain storage. Saving a profile omits usernames and
-keys containing password, passwd,
-secret, token, JAAS or private, plus inline TLS private-key properties. A saved
-certificate/key **path** is not removed. Profiles you supply yourself may contain
+The SASL mechanism determines which credentials are sent. For a public OAuth
+client, choose OAUTHBEARER, enter the HTTPS token endpoint and client ID, and
+supply the refresh token for the session. The app exchanges and renews access
+tokens as needed. Usernames, passwords, bearer tokens, and inline TLS private
+keys stay out of saved profiles. The client ID, plain HTTPS endpoint, token
+lifetime cap and certificate paths can be saved. Endpoint URLs with query
+parameters stay in session memory. Profiles you supply yourself may contain
 credentials, and exports contain the actual topic data: keep those files in an
 appropriate location.
 
 Both certificate verification and TLS hostname verification default to enabled.
 For a private CA, set `ssl.ca.location` to the appropriate PEM file rather than
-disabling verification. Native SSL/SCRAM capabilities are included in the builds,
-but the integration fixture exercised PLAINTEXT and SASL/PLAIN; it did not supply
-a TLS/mTLS or SCRAM broker. GSSAPI/Kerberos, OAuth, Schema Registry, Avro/Protobuf
+disabling verification. The token endpoint uses the platform trust store, or
+a separate PEM bundle supplied through `oauth.ssl.ca.location`.
+See the [release test report](TEST-REPORT.md) for broker coverage.
+GSSAPI/Kerberos, Schema Registry, Avro/Protobuf
 decoders, cluster administration and full-text broker search are outside this
 prototype.
 

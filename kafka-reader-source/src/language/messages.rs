@@ -74,11 +74,79 @@ impl Language {
             "Enter bootstrap.servers as host:port" => {
                 "Укажите bootstrap.servers в формате хост:порт"
             }
-            "This is a librdkafka client. Replace Java sasl.jaas.config with sasl.username and sasl.password in session properties." => {
-                "Этот клиент использует librdkafka. В параметрах сеанса замените sasl.jaas.config на sasl.username и sasl.password"
+            "Choose username/password or OAuth refresh token in Authentication. Java sasl.jaas.config is not supported." => {
+                "На вкладке «Аутентификация» выберите вход по имени и паролю или по токену обновления OAuth. Параметр Java sasl.jaas.config не поддерживается"
             }
-            "This prototype supports only SASL PLAIN, SCRAM-SHA-256 and SCRAM-SHA-512" => {
-                "Поддерживаются механизмы SASL PLAIN, SCRAM-SHA-256 и SCRAM-SHA-512"
+            "Supported SASL mechanisms are PLAIN, SCRAM-SHA-256, SCRAM-SHA-512 and OAUTHBEARER" => {
+                "Поддерживаются механизмы SASL PLAIN, SCRAM-SHA-256, SCRAM-SHA-512 и OAUTHBEARER"
+            }
+            "Refresh-token authentication requires SASL_SSL" => {
+                "Для входа по токену обновления выберите SASL_SSL"
+            }
+            "Refresh-token authentication requires Kafka TLS certificate and hostname verification" => {
+                "Для входа по токену обновления включите проверку сертификата TLS и имени узла Kafka"
+            }
+            "Enter a refresh token for this session"
+            | "Enter an OAuth refresh token for this session" => {
+                "Введите токен обновления OAuth для этого сеанса"
+            }
+            "Enter an HTTPS OAuth token endpoint without embedded credentials or a fragment" => {
+                "Введите HTTPS-адрес для получения токена OAuth без учётных данных и фрагмента после символа #"
+            }
+            "Enter an OAuth client ID" => "Введите идентификатор клиента OAuth",
+            "OAuth maximum token lifetime must be a positive number of seconds"
+            | "OAuth maximum token lifetime must be positive" => {
+                "Максимальный срок действия токена OAuth должен быть положительным целым числом секунд"
+            }
+            "Kafka client did not request an initial OAuth access token" => {
+                "Клиент Kafka не запросил начальный токен доступа OAuth"
+            }
+            "Could not start Kafka token refresh worker" => {
+                "Не удалось запустить обновление токена Kafka"
+            }
+            "Kafka token refresh worker stopped unexpectedly" => {
+                "Обновление токена Kafka неожиданно остановилось"
+            }
+            "Kafka broker rejected OAuth authentication. Check the listener and token audience." => {
+                "Брокер Kafka отклонил аутентификацию OAuth. Проверьте адрес и порт брокера и назначение токена (audience)"
+            }
+            "OAuth refresh is not configured" => "Обновление токена OAuth не настроено",
+            "OAuth token endpoint timed out" => "Сервер авторизации OAuth не ответил вовремя",
+            "OAuth token endpoint TLS verification or handshake failed" => {
+                "Не удалось установить защищённое TLS-соединение с сервером авторизации OAuth"
+            }
+            "Could not connect to the OAuth token endpoint" => {
+                "Не удалось подключиться к серверу авторизации OAuth"
+            }
+            "Could not read OAuth token response within the size or time limit" => {
+                "Ответ сервера авторизации OAuth слишком велик или не получен вовремя"
+            }
+            "Invalid OAuth token response" => "Некорректный ответ сервера авторизации OAuth",
+            "Could not read the OAuth CA certificate file" => {
+                "Не удалось прочитать файл сертификатов центра сертификации для OAuth"
+            }
+            "OAuth CA certificate file exceeds 8 MiB" => {
+                "Файл сертификатов для OAuth превышает 8 МиБ"
+            }
+            "Invalid OAuth CA certificate file" => "Некорректный файл сертификатов для OAuth",
+            "OAuth CA file contains no PEM certificates" => {
+                "В файле центра сертификации для OAuth нет сертификатов PEM"
+            }
+            "System clock is before the Unix epoch" => {
+                "Системные часы показывают дату до 1 января 1970 года"
+            }
+            "System clock is out of range" => "Системное время вне допустимого диапазона",
+            "OAuth token response did not contain a usable bearer access token" => {
+                "В ответе сервера авторизации OAuth отсутствует пригодный для входа токен доступа Bearer"
+            }
+            "OAuth token lifetime is out of range" => {
+                "Срок действия токена OAuth вне допустимого диапазона"
+            }
+            "OAuth token endpoint returned an expired access token" => {
+                "Сервер авторизации OAuth вернул просроченный токен доступа"
+            }
+            "OAuth token endpoint returned an invalid replacement refresh token" => {
+                "Сервер авторизации OAuth вернул недействительный токен обновления взамен предыдущего"
             }
             "Kafka Reader requires Metadata v4 or newer (Kafka 0.11+) to prevent topic auto-creation" => {
                 "Для защиты от автоматического создания топиков требуется Metadata v4 или новее (Kafka 0.11+)"
@@ -136,6 +204,10 @@ impl Language {
 
 fn diagnostic_with_values(message: &str) -> String {
     for (prefix, translated) in [
+        (
+            "OAuth token endpoint returned HTTP ",
+            "Сервер авторизации OAuth вернул код HTTP ",
+        ),
         (
             "Cannot load workspace: ",
             "Не удалось загрузить рабочее пространство: ",
@@ -242,6 +314,10 @@ mod tests {
         assert_eq!(
             Language::Russian.message("Record limit reached · 21 fetched"),
             "Достигнут лимит сообщений. Получено: 21"
+        );
+        assert_eq!(
+            Language::Russian.message("OAuth token endpoint returned HTTP 401"),
+            "Сервер авторизации OAuth вернул код HTTP 401"
         );
         assert_eq!(
             Language::Russian.message("Native text 123"),

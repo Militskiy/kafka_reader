@@ -1,0 +1,75 @@
+{
+  "version": "0.5.0",
+  "date": "2026-11-23",
+  "platform": "Windows-11-10.0.26300-SP0",
+  "target": "x86_64-pc-windows-gnu",
+  "rustc": "1.100.0",
+  "cargo": "1.100.0",
+  "mingw_gcc": "16.2.0",
+  "binary_sha256": "bd69487d3b1a95484d78c15f5c236506f18c69fb808b5dd3aedaa36e6efc64b9",
+  "version_output": "Kafka Reader 0.5.0 · native binary · librdkafka 2.16.0",
+  "authenticode": {
+    "publisher": "CN=Alexey Militskiy",
+    "self_signed": true,
+    "publisher_certificate_sha256": "a1ea11a7b00d1303a2deb143549a02642dabe945d4db9b4e518f0544f63f8572",
+    "authenticode_digest_sha256": "49a6f0f40afb3f82d2c80aae72556e3a9a53dbabaaabca04e2880ffdcc2ccf60",
+    "timestamp_utc": "2026-11-23T08:29:13Z",
+    "timestamp_responder": "DigiCert SHA256 RSA4096 Timestamp Responder 2026 1",
+    "verification": "osslsigncode 2.16 verified the SHA-256 signature against the pinned publisher certificate and the RFC 3161 timestamp against public CA roots. Windows default trust reported an untrusted root."
+  },
+  "format_check": "PASS",
+  "release_tests": {
+    "library": 44,
+    "application": 20,
+    "failed": 0
+  },
+  "offline_self_test": {
+    "checks": 9,
+    "librdkafka": "2.16.0",
+    "selfTest": "PASS"
+  },
+  "gui_smoke": {
+    "appVersion": "0.5.0",
+    "checks": 49,
+    "guiSmoke": "PASS",
+    "nativeChildViewport": true,
+    "openTabs": 4,
+    "retained": 120
+  },
+  "gui_reopen": {
+    "appVersion": "0.5.0",
+    "checks": 17,
+    "credentialsRestored": false,
+    "guiReopen": "PASS",
+    "language": "russian",
+    "offlineServersRestored": 0,
+    "realServersRestored": 1,
+    "recordsRestored": 0,
+    "sessionStarted": false
+  },
+  "native_clipboard": {
+    "passed": true,
+    "checks": [
+      "Pasted external Unicode text into the server editor with Ctrl+V",
+      "Copied selected Unicode text to the Windows clipboard with Ctrl+C",
+      "Replaced a selection using the paste icon",
+      "Pasted into a separate broker field and verified the saved profile"
+    ],
+    "results": {
+      "ctrl_v_unicode": true,
+      "ctrl_c_unicode": true,
+      "targeted_paste_icon": true,
+      "paste_replaces_selected_unicode": true
+    }
+  },
+  "pe_imports": "Windows system DLLs only",
+  "kafka_integration_report": "kafka-integration.json",
+  "sondahub_bridge": {
+    "bounds_partitions": 6,
+    "records_read": 1,
+    "port": 9192,
+    "stopped_and_port_free": true
+  },
+  "packaging_unit_tests_passed": 3,
+  "fixture_isolation_tests_passed": 4
+}

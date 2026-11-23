@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0 — 23 November 2026
+
+- Added system clipboard support for keyboard shortcuts and inspector copy
+  actions. Paste buttons in the server editor insert text at the cursor or
+  replace the selected text, including in masked credential fields.
+- Added optional SASL/OAUTHBEARER authentication with an HTTPS refresh-token
+  exchange. Kafka Reader renews the access token and keeps rotated refresh
+  tokens in memory for the session. PLAIN and SCRAM continue to accept a
+  username and password.
+
 ## 0.4.0 — 22 November 2026
 
 - Signed the Windows executable with Alexey Militskiy's self-signed Authenticode

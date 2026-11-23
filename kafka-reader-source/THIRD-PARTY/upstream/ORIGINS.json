@@ -40,5 +40,11 @@
     "path": "upstream/profiling/LICENSE-APACHE",
     "url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-APACHE",
     "bytes": 10818
+  },
+  {
+    "packageFamily": "clipboard-win",
+    "path": "upstream/clipboard-win/LICENSE",
+    "url": "https://raw.githubusercontent.com/DoumanAsh/clipboard-win/ed27008ae5d1f10cfbb266de039f0fb35fd05a56/LICENSE",
+    "bytes": 1338
   }
 ]

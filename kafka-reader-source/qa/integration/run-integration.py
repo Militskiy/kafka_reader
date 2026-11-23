@@ -73,10 +73,10 @@ class Fixture:
 
 
 @contextmanager
-def reserve_ports():
+def reserve_ports(count=3):
     with ExitStack() as sockets:
         ports = []
-        for _ in range(3):
+        for _ in range(count):
             listener = sockets.enter_context(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
             if hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):
                 listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
@@ -113,7 +113,8 @@ def parse_summary(stdout):
     raise AssertionError('Reader did not emit a JSON summary: ' + stdout[-1000:])
 
 
-def test_reader(args, fixture, run_dir, session, plain_port, client_port, reader_password):
+def test_reader(args, fixture, run_dir, session, plain_port, client_port, reader_password,
+                issuer=None, oauth_port=None):
     app = args.app
     output = run_dir / app
     output.mkdir()
@@ -141,7 +142,9 @@ def test_reader(args, fixture, run_dir, session, plain_port, client_port, reader
         if partitions is not None: command += ['--partitions', partitions]
         if follow: command += ['--follow']
         if inspect: command += ['--inspect']
-        process = subprocess.Popen(command, cwd=args.exe.resolve().parent, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', bufsize=1)
+        env = dict(os.environ, NO_PROXY='127.0.0.1,localhost', no_proxy='127.0.0.1,localhost') if issuer else None
+        process = subprocess.Popen(command, cwd=args.exe.resolve().parent, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, encoding='utf-8', bufsize=1, env=env)
         errors = []
         ready = threading.Event()
         def read_errors():
@@ -199,6 +202,32 @@ def test_reader(args, fixture, run_dir, session, plain_port, client_port, reader
     check(code != 0 or str(bad.get('state', '')).upper() == 'FAILED', 'Unauthorized topic returns a controlled failure')
     bad, _, code = run(config=wrong, failure=True)
     check(code != 0 or str(bad.get('state', '')).upper() == 'FAILED', 'Wrong password returns a controlled failure')
+    if issuer:
+        # The fixture CA exists only in this session and was never installed in the OS.
+        untrusted = session / 'oauth-untrusted.properties'
+        profile = issuer.profile(oauth_port).read_text(encoding='utf-8')
+        untrusted.write_text('\n'.join(line for line in profile.splitlines()
+                                       if not line.startswith('oauth.ssl.ca.location=')) + '\n', encoding='utf-8')
+        failed, _, code = run(config=untrusted, failure=True)
+        check(code != 0 and failed['state'] == 'FAILED' and issuer.grants == 0,
+              'An untrusted HTTPS issuer is rejected before it receives the refresh token')
+        meta, _, _ = run(config=issuer.profile(oauth_port), inspect=True)
+        check(issuer.grants >= 1 and len(meta['partitions']) == 3,
+              'HTTPS refresh-token exchange authenticates for exact-topic metadata over SASL_SSL')
+
+        expected_grants = issuer.grants + 2
+        def append_after_refresh():
+            issuer.wait_for_grants(expected_grants)
+            fixture.call('append', app, partition=1, value='oauth-after-renewal')
+
+        _, records, _ = run(config=issuer.profile(oauth_port), mode='latest', partitions='1',
+                            maximum=1, follow=True, after_reading=append_after_refresh)
+        check(issuer.grants >= expected_grants, 'An active reader renews using the rotated refresh token')
+        check(len(records) == 1 and records[0]['valueUtf8'] == 'oauth-after-renewal',
+              'The OAuth-authenticated topic-only reader receives a record after renewal')
+        failed, _, code = run(config=issuer.profile(oauth_port, invalid=True), failure=True)
+        check(code != 0 and failed['state'] == 'FAILED' and '400' in failed['detail'],
+              'A rejected refresh token surfaces the identity provider HTTP status')
     state = fixture.call('state', app)
     check(state['offsets'] == baseline['offsets'], 'Existing group offsets remain unchanged despite imported commit/group settings')
     check(state['groups'] == baseline['groups'], 'Reader sessions create no consumer groups')
@@ -215,7 +244,8 @@ def test_reader(args, fixture, run_dir, session, plain_port, client_port, reader
     binaries = [executable, executable.with_suffix('.dll'), *executable.parent.glob('*librdkafka*')]
     hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in binaries if p.is_file()}
     report = dict(app=app, status='PASS', count=len(checks), checks=checks,
-                  fixture='Apache Kafka 4.1.2, local KRaft, topic-only SASL/PLAIN reader',
+                  fixture='Apache Kafka 4.1.2, local KRaft, topic-only SASL/PLAIN reader'
+                          + (' and TLS OAuth refresh-token listener' if issuer else ''),
                   completed_at_utc=datetime.now(timezone.utc).isoformat(),
                   tested_platform=platform.platform(), binary_sha256=hashes)
     (output / 'integration-report.json').write_text(json.dumps(report, indent=2) + '\n')
@@ -243,11 +273,21 @@ def run_fixture(args):
                         '@classpath.args', '-d', '.', str(ROOT/'FixtureHost.java')], cwd=session, check=True)
         java = [java_command('java'), '-XX:-UsePerfData', '-Dfile.encoding=UTF-8', '-Xmx512m', '@classpath.args']
         log = resources.enter_context((run_dir / 'broker.log').open('w', encoding='utf-8'))
-        with reserve_ports() as (plain_port, controller_port, client_port):
+        issuer = None
+        if getattr(args, 'oauth', False):
+            from oauth_fixture import start_issuer
+            issuer = resources.enter_context(start_issuer(session))
+        with reserve_ports(4 if issuer else 3) as ports:
+            plain_port, controller_port, client_port = ports[:3]
+            oauth_port = ports[3] if issuer else None
             template = Template((ROOT / 'server.properties').read_text(encoding='utf-8'))
             config = template.substitute(plain_port=plain_port, controller_port=controller_port,
                                          client_port=client_port, admin_password=admin_password,
-                                         reader_password=reader_password)
+                                         reader_password=reader_password,
+                                         oauth_listener=f',OAUTH://127.0.0.1:{oauth_port}' if issuer else '',
+                                         oauth_protocol=',OAUTH:SASL_SSL' if issuer else '')
+            if issuer:
+                config += '\n' + issuer.broker_config()
             (session / 'server.properties').write_text(config, encoding='utf-8')
             subprocess.run(java + ['kafka.tools.StorageTool', 'format', '--cluster-id=' + cluster_id, '-c', 'server.properties'],
                            cwd=session, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=60)
@@ -261,7 +301,8 @@ def run_fixture(args):
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=helper_log, text=True, encoding='utf-8', bufsize=1))
         resources.callback(close_helper, process)
         fixture = Fixture(process, broker, cluster_id)
-        report = test_reader(args, fixture, run_dir, session, plain_port, client_port, reader_password)
+        report = test_reader(args, fixture, run_dir, session, plain_port, client_port, reader_password,
+                             issuer, oauth_port)
         print(json.dumps(report), flush=True)
 
 
@@ -270,7 +311,11 @@ def main():
     parser.add_argument('--app', required=True, choices=['csharp','rust'])
     parser.add_argument('--exe', type=Path, required=True)
     parser.add_argument('--classpath', type=Path, default=ROOT/'broker-classpath.txt')
-    run_fixture(parser.parse_args())
+    parser.add_argument('--oauth', action='store_true', help='Test OAuth against an ephemeral HTTPS issuer and SASL_SSL Kafka listener (requires OpenSSL)')
+    args = parser.parse_args()
+    if args.oauth and args.app != 'rust':
+        parser.error('--oauth is supported by the Rust reader')
+    run_fixture(args)
 
 
 if __name__=='__main__': main()

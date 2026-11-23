@@ -15,10 +15,10 @@ from cargo_notices import notice_files
 
 ROOT = Path(__file__).resolve().parent.parent
 COMMON = ["README.md", "QUICKSTART.md", "CHANGELOG.md", "TEST-REPORT.md", "LICENSE",
-          "THIRD-PARTY-NOTICES.md", "THIRD-PARTY", "examples", "docs/screenshots/v0.3.0",
-          "qa/results/v0.3.0", "qa/results/v0.4.0"]
+          "THIRD-PARTY-NOTICES.md", "THIRD-PARTY", "examples", "docs/screenshots/v0.3.0", "docs/screenshots/v0.5.0",
+          "qa/results/v0.3.0", "qa/results/v0.4.0", "qa/results/v0.5.0"]
 FIXTURE_FILES = [
-    ".gitignore", "FixtureHost.java", "README.md", "pom.xml", "run-bridge-check.py",
+    ".gitignore", "FixtureHost.java", "README.md", "oauth_fixture.py", "pom.xml", "run-bridge-check.py",
     "run-gui-v02.py", "run-gui-v03.py", "run-integration.py", "server.properties",
     "test_fixture_isolation.py",
 ]

@@ -1,6 +1,6 @@
 # Architecture
 
-This describes the **Kafka Reader 0.4.0** implementation. Check the referenced
+This describes the **Kafka Reader 0.5.0** implementation. Check the referenced
 source when changing it; [TEST-REPORT.md](../TEST-REPORT.md) records executed
 verification and platform limits.
 
@@ -41,6 +41,15 @@ builds a `Request`. `Session::start` moves that request to a worker thread. The
 worker emits metadata, immutable `Arc<Record>` values, progress and state
 events. The GUI drains these into the active `TopicView`; the CLI drains the
 same events directly into its summary and optional JSONL output.
+
+For SASL/OAUTHBEARER, the reader exchanges a refresh token over HTTPS and gives
+the resulting bearer token and expiry to librdkafka's refresh callback. It
+services callbacks while metadata or partition operations are in progress.
+An OAuth session belongs to one server and can carry a rotated refresh token
+from a successful connection test into subsequent reads. Token exchange uses
+the platform TLS verifier or the configured SSO CA. Kafka verifies its TLS
+peer using the broker settings. The app stores refresh and access tokens in
+memory and excludes them from saved workspaces and profile exports.
 
 `safe_properties` removes `group.id`, `group.instance.id` and unsupported or
 executable extension hooks. It forces modern and legacy automatic commits,

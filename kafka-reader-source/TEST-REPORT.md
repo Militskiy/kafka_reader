@@ -1,5 +1,34 @@
 # Kafka Reader verification reports
 
+## 0.5.0 · Windows x64 release
+
+Verified on Windows 11 on 23 November 2026. The signed executable reports
+Kafka Reader 0.5.0 and librdkafka 2.16.0.
+
+| Check | Result |
+|---|---|
+| Rust format, locked Windows GNU build and release tests | Passed. 44 library tests and 20 application tests. |
+| Offline self-test with Windows-only PATH | 9 checks passed. |
+| Native desktop smoke and separate-process reopen | 49 and 17 checks passed. Russian was restored on reopen. |
+| Windows clipboard in the Add server window | Ctrl+V pasted Cyrillic and emoji, Ctrl+C returned the exact text to Windows, and the paste button replaced a selection and filled another field. |
+| Disposable Apache Kafka 4.1.2 fixture | 25 checks passed, including SASL/PLAIN and OAUTHBEARER over SASL_SSL with a local HTTPS token issuer. |
+| Sondahub bridge | Read one record across six reported partition bounds. The bridge exited and port 9192 was free. |
+| Packaging and fixture regression tests | 3 packaging and 4 fixture-isolation tests passed. |
+
+The OAuth checks covered rejection of an untrusted issuer, a successful refresh
+grant and topic inspection, rotation during an active read, record delivery
+after renewal, and rejection of an invalid refresh token. The fixture used
+synthetic credentials and a temporary CA. Enterprise SSO was outside this run.
+
+The standalone EXE and the EXE in the Windows ZIP share SHA-256
+`bd69487d3b1a95484d78c15f5c236506f18c69fb808b5dd3aedaa36e6efc64b9`.
+The signature verified against Alexey Militskiy's self-signed publisher
+certificate. DigiCert's timestamp verified against public CA roots. Default
+Windows publisher validation reported an untrusted root.
+See the [Windows results](qa/results/v0.5.0/windows-release.json),
+[Kafka checks](qa/results/v0.5.0/kafka-integration.json), and
+[native authentication form](docs/screenshots/v0.5.0/windows-oauth.png).
+
 ## 0.4.0 · Windows x64 release
 
 On 22 November 2026, the Windows GNU build passed the format check and all

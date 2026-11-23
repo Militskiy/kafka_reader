@@ -355,6 +355,19 @@ pub fn parse_properties(text: &str) -> Result<Properties, String> {
     }
     Ok(props)
 }
+pub(crate) fn sensitive_property(key: &str, value: &str) -> bool {
+    let k = key.to_lowercase();
+    if value.contains("PRIVATE KEY") || k == "sasl.username" {
+        return true;
+    }
+    if k == "oauth.token.endpoint.uri" {
+        return value.contains('?') || crate::oauth::validate_endpoint(value).is_err();
+    }
+    if k == "oauth.max.token.expiry.seconds" {
+        return value.parse::<u64>().is_err();
+    }
+    secret_key(&k)
+}
 pub fn secret_key(key: &str) -> bool {
     let k = key.to_lowercase();
     ["password", "passwd", "secret", "token", "jaas", "private"]
@@ -367,7 +380,7 @@ pub fn profile_text(props: &Properties) -> String {
     let mut s =
         "# Kafka Reader profile. Credentials are omitted. Values are literal UTF-8.\n".to_string();
     for (k, v) in props {
-        if !secret_key(k) && !v.contains("PRIVATE KEY") {
+        if !sensitive_property(k, v) {
             s.push_str(k);
             s.push('=');
             s.push_str(&v.replace(['\n', '\r'], ""));
@@ -379,7 +392,7 @@ pub fn profile_text(props: &Properties) -> String {
 pub fn redact(error: &str, props: &Properties) -> String {
     let mut s = error.to_string();
     for (k, v) in props {
-        if secret_key(k) && !v.is_empty() {
+        if sensitive_property(k, v) && !v.is_empty() {
             s = s.replace(v, "[redacted]");
         }
     }
@@ -582,6 +595,28 @@ mod tests {
         assert!(!s.contains("jaas.config"));
         assert!(!s.contains("ssl.key.pem"));
         assert!(s.contains("reader.topic=t"));
+    }
+    #[test]
+    fn oauth_profiles_keep_configuration_and_strip_credentials() {
+        let props = parse_properties(
+            "oauth.token.endpoint.uri=https://sso.example/token\noauth.client.id=kafka-cli\noauth.max.token.expiry.seconds=300\noauth.refresh.token=SAMPLE_REFRESH\nsasl.username=SAMPLE_LOGIN\nsasl.password=SAMPLE_PASSWORD",
+        )
+        .unwrap();
+        let exported = profile_text(&props);
+        for safe in ["https://sso.example/token", "kafka-cli", "300"] {
+            assert!(exported.contains(safe));
+        }
+        assert!(!exported.contains("SAMPLE_"));
+        for endpoint in [
+            "https://user:SAMPLE_PASSWORD@sso.example/token",
+            "https://sso.example/token?code=SAMPLE_QUERY",
+            "https://sso.example/token#SAMPLE_FRAGMENT",
+        ] {
+            let mut properties = props.clone();
+            properties.insert("oauth.token.endpoint.uri".into(), endpoint.into());
+            assert!(!profile_text(&properties).contains(endpoint));
+            assert_eq!(redact(endpoint, &properties), "[redacted]");
+        }
     }
     #[test]
     fn unicode_preview_and_binary() {

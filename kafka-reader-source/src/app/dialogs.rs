@@ -11,6 +11,10 @@ pub(super) struct ServerEditor {
     pub mechanism: String,
     pub username: String,
     pub password: String,
+    pub oauth_endpoint: String,
+    pub oauth_client: String,
+    pub refresh_token: String,
+    pub max_token_seconds: String,
     pub ca: String,
     pub certificate: String,
     pub key: String,
@@ -21,6 +25,7 @@ pub(super) struct ServerEditor {
     pub tab: usize,
     pub message: String,
     test: Option<Session>,
+    oauth_session: OAuthSession,
     pub is_new: bool,
 }
 impl ServerEditor {
@@ -34,26 +39,39 @@ impl ServerEditor {
             protocol = "PLAINTEXT".into();
         }
         let mut mechanism = take("sasl.mechanism");
+        let alternate_mechanism = take("sasl.mechanisms");
         if mechanism.is_empty() {
-            mechanism = take("sasl.mechanisms");
+            mechanism = alternate_mechanism;
         }
         if mechanism.is_empty() {
             mechanism = "PLAIN".into();
         }
         let username = take("sasl.username");
         let password = take("sasl.password");
+        let oauth_endpoint = take("oauth.token.endpoint.uri");
+        let refresh_token = take("oauth.refresh.token");
         let ca = take("ssl.ca.location");
         let certificate = take("ssl.certificate.location");
         let key = take("ssl.key.location");
         let key_password = take("ssl.key.password");
+        let oauth_client = properties
+            .remove("oauth.client.id")
+            .unwrap_or_else(|| "kafka-cli".into());
+        let max_token_seconds = properties
+            .remove("oauth.max.token.expiry.seconds")
+            .unwrap_or_else(|| "300".into());
         Self {
             name: server.name.clone(),
             original: server,
             brokers,
-            protocol,
-            mechanism,
+            protocol: protocol.to_ascii_uppercase(),
+            mechanism: mechanism.to_ascii_uppercase(),
             username,
             password,
+            oauth_endpoint,
+            oauth_client,
+            refresh_token,
+            max_token_seconds,
             ca,
             certificate,
             key,
@@ -68,6 +86,7 @@ impl ServerEditor {
             tab: 0,
             message: String::new(),
             test: None,
+            oauth_session: OAuthSession::default(),
             is_new,
         }
     }
@@ -75,17 +94,68 @@ impl ServerEditor {
         let mut p = parse_properties(&self.advanced)?;
         p.insert("bootstrap.servers".into(), self.brokers.trim().into());
         p.insert("security.protocol".into(), self.protocol.clone());
+        p.remove("sasl.mechanisms");
         p.insert("sasl.mechanism".into(), self.mechanism.clone());
-        for (key, value) in [
+        let login = [
             ("sasl.username", &self.username),
             ("sasl.password", &self.password),
+        ];
+        let oauth = [
+            ("oauth.token.endpoint.uri", &self.oauth_endpoint),
+            ("oauth.client.id", &self.oauth_client),
+            ("oauth.refresh.token", &self.refresh_token),
+            ("oauth.max.token.expiry.seconds", &self.max_token_seconds),
+        ];
+        let (active, inactive): (&[_], &[_]) = if self.mechanism == "OAUTHBEARER" {
+            if self.protocol != "SASL_SSL" {
+                return Err(lang
+                    .text(
+                        "Choose SASL_SSL on Connection to use a refresh token",
+                        "Для токена обновления выберите SASL_SSL на вкладке «Подключение»",
+                    )
+                    .into());
+            }
+            (&oauth, &login)
+        } else {
+            (&login, &oauth)
+        };
+        for (key, _) in inactive {
+            p.remove(*key);
+        }
+        for (key, value) in active.iter().copied().chain([
             ("ssl.ca.location", &self.ca),
             ("ssl.certificate.location", &self.certificate),
             ("ssl.key.location", &self.key),
             ("ssl.key.password", &self.key_password),
-        ] {
+        ]) {
             if !value.is_empty() {
                 p.insert(key.into(), value.clone());
+            }
+        }
+        if self.mechanism == "OAUTHBEARER" {
+            let prop = |key: &str| p.get(key).map(String::as_str).unwrap_or_default();
+            kafka_reader_rust::oauth::validate_endpoint(prop("oauth.token.endpoint.uri"))
+                .map_err(|e| lang.message(&e))?;
+            let client = prop("oauth.client.id");
+            if client.trim().is_empty() || client.chars().any(char::is_control) {
+                return Err(lang
+                    .text(
+                        "Enter an OAuth client ID",
+                        "Введите идентификатор клиента OAuth",
+                    )
+                    .into());
+            }
+            if prop("oauth.max.token.expiry.seconds")
+                .parse::<u64>()
+                .unwrap_or_default()
+                == 0
+            {
+                return Err(lang
+                    .text(
+                        "Enter a positive token lifetime in seconds",
+                        "Введите положительный срок действия токена в секундах",
+                    )
+                    .into());
             }
         }
         let secrets = p
@@ -118,7 +188,16 @@ impl ServerEditor {
         }
         Ok((server, secrets))
     }
-    fn test(&mut self, lang: Language) {
+    fn bound_oauth(&self, props: &Properties, saved: Option<&OAuthSession>) -> OAuthSession {
+        let mut session = if self.oauth_session.matches(props) {
+            self.oauth_session.clone()
+        } else {
+            saved.cloned().unwrap_or_default()
+        };
+        session.bind(props);
+        session
+    }
+    fn test(&mut self, lang: Language, saved: Option<&OAuthSession>) {
         if self.test.as_ref().is_some_and(Session::running) {
             return;
         }
@@ -142,7 +221,8 @@ impl ServerEditor {
         })();
         match request {
             Ok(request) => {
-                self.test = Some(Session::start(request));
+                self.oauth_session = self.bound_oauth(&request.props, saved);
+                self.test = Some(Session::start_with_oauth(request, &mut self.oauth_session));
                 self.message = lang
                     .text("Checking this exact topic…", "Проверяем доступ к топику…")
                     .into();
@@ -191,6 +271,7 @@ impl ServerEditor {
             server.name = self.name.clone();
             server.properties = props;
             let mut loaded = Self::new(server, Properties::new(), self.is_new, topic);
+            loaded.oauth_session = self.oauth_session.clone();
             loaded.file_path = self.file_path.clone();
             loaded.tab = 3;
             loaded.message = lang
@@ -322,7 +403,14 @@ impl ReaderApp {
                 .map(|t| t.name.clone())
                 .unwrap_or_default()
         };
-        self.server_editor = Some(ServerEditor::new(server, credentials, id.is_none(), topic));
+        let oauth_session = self
+            .oauth_sessions
+            .get(&server.id)
+            .cloned()
+            .unwrap_or_default();
+        let mut editor = ServerEditor::new(server, credentials, id.is_none(), topic);
+        editor.oauth_session = oauth_session;
+        self.server_editor = Some(editor);
     }
     pub(super) fn save_server(&mut self, editor: &ServerEditor) -> Result<(), String> {
         let lang = self.language();
@@ -370,6 +458,13 @@ impl ReaderApp {
         let previous = self.active().cloned();
         self.workspace = proposed;
         self.credentials.insert(server.id, credentials);
+        if editor.mechanism == "OAUTHBEARER" {
+            let props = session_properties(&server, &self.credentials);
+            let session = editor.bound_oauth(&props, self.oauth_sessions.get(&server.id));
+            self.oauth_sessions.insert(server.id, session);
+        } else {
+            self.oauth_sessions.remove(&server.id);
+        }
         for (tab, view) in &mut self.cached {
             if tab.server == server.id {
                 *view = TopicView::new(&self.workspace.settings);
@@ -406,7 +501,7 @@ impl ReaderApp {
                             ui.add(egui::Label::new(RichText::new(&editor.message).small()).wrap());
                             ui.add_space(8.);
                             ui.horizontal(|ui| {
-                                if ui.add_enabled(!editor.test.as_ref().is_some_and(Session::running), egui::Button::new(lang.text("Test exact topic", "Проверить топик"))).clicked() { editor.test(lang); }
+                                if ui.add_enabled(!editor.test.as_ref().is_some_and(Session::running), egui::Button::new(lang.text("Test exact topic", "Проверить топик"))).clicked() { editor.test(lang, self.oauth_sessions.get(&editor.original.id)); }
                                 if editor.test.as_ref().is_some_and(Session::running) { ui.spinner(); }
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     if ui.add(egui::Button::new(RichText::new(lang.text("Save server", "Сохранить сервер")).strong()).fill(selection(self.dark()))).clicked() { action = Action::Save; }
@@ -417,13 +512,13 @@ impl ReaderApp {
                         egui::ScrollArea::vertical().id_salt("server-editor-content").show(ui, |ui| {
                             match editor.tab {
                                 0 => {
-                                    field(ui, lang.text("Server name", "Имя сервера"), &mut editor.name, lang.text("Development", "Среда разработки"), false);
-                                    field(ui, lang.text("Bootstrap servers", "Начальные брокеры"), &mut editor.brokers, "broker-1:9092,broker-2:9092", false);
+                                    field(ui, lang, lang.text("Server name", "Имя сервера"), &mut editor.name, lang.text("Development", "Среда разработки"), false);
+                                    field(ui, lang, lang.text("Bootstrap servers", "Начальные брокеры"), &mut editor.brokers, "broker-1:9092,broker-2:9092", false);
                                     ui.label(lang.text("Security protocol", "Протокол безопасности"));
                                     egui::ComboBox::from_id_salt("protocol").selected_text(&editor.protocol).width(260.).show_ui(ui, |ui| {
                                         for protocol in ["PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"] { ui.selectable_value(&mut editor.protocol, protocol.into(), protocol); }
                                     }); ui.add_space(14.);
-                                    field(ui, lang.text("Exact topic to test / register", "Точное имя топика для проверки или добавления"), &mut editor.test_topic, "orders.events", false);
+                                    field(ui, lang, lang.text("Exact topic to test / register", "Точное имя топика для проверки или добавления"), &mut editor.test_topic, "orders.events", false);
                                     ui.label(RichText::new(lang.text("Testing queries this exact topic asynchronously. Saving a server does not connect or read messages.", "Проверка обращается только к указанному топику в фоновом режиме. При сохранении сервера подключение не открывается.")).small().color(muted(self.dark())));
                                     ui.add_space(12.);
                                     ui.label(RichText::new(lang.text("Add more topic names from the server tree after saving.", "После сохранения можно добавить ещё топики в дереве серверов.")).small().color(muted(self.dark())));
@@ -433,29 +528,41 @@ impl ReaderApp {
                                     ui.label(RichText::new(lang.text("Usernames, passwords and tokens stay in memory and are not saved with your workspace.", "Имена пользователей, пароли и токены хранятся только в памяти до конца сеанса.")).small().color(muted(self.dark())));
                                     ui.add_space(15.);
                                     ui.label(lang.text("SASL mechanism", "Механизм SASL"));
-                                    egui::ComboBox::from_id_salt("sasl-mechanism").selected_text(&editor.mechanism).width(260.).show_ui(ui, |ui| {
+                                    let refresh_label = lang.text("OAUTHBEARER · Refresh token", "OAUTHBEARER · Токен обновления");
+                                    let selected = if editor.mechanism == "OAUTHBEARER" { refresh_label } else { &editor.mechanism };
+                                    egui::ComboBox::from_id_salt("sasl-mechanism").selected_text(selected).width(290.).show_ui(ui, |ui| {
                                         for mechanism in ["PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"] { ui.selectable_value(&mut editor.mechanism, mechanism.into(), mechanism); }
+                                        if ui.selectable_value(&mut editor.mechanism, "OAUTHBEARER".into(), refresh_label).changed() {
+                                            editor.protocol = "SASL_SSL".into();
+                                        }
                                     }); ui.add_space(13.);
-                                    field(ui, lang.text("Username", "Имя пользователя"), &mut editor.username, lang.text("Kafka principal", "Пользователь Kafka"), false);
-                                    field(ui, lang.text("Password", "Пароль"), &mut editor.password, lang.text("Session only", "Только для этого сеанса"), true);
-                                    if !editor.protocol.starts_with("SASL") { ui.label(RichText::new(lang.text("Choose SASL_SSL or SASL_PLAINTEXT on Connection to use these credentials.", "Чтобы использовать эти данные, выберите SASL_SSL или SASL_PLAINTEXT на вкладке «Подключение».")).color(accent(self.dark()))); }
-                                    ui.add_space(10.); ui.small(lang.text("The native client uses sasl.username / sasl.password. Java JAAS is not used.", "Клиент использует параметры sasl.username и sasl.password. Настройки Java JAAS не поддерживаются."));
+                                    if editor.mechanism == "OAUTHBEARER" {
+                                        field(ui, lang, lang.text("Token endpoint URL", "URL для получения токена"), &mut editor.oauth_endpoint, "https://sso.example.org/realms/example/protocol/openid-connect/token", false);
+                                        field(ui, lang, lang.text("OAuth client ID", "Идентификатор клиента OAuth"), &mut editor.oauth_client, "kafka-cli", false);
+                                        field(ui, lang, lang.text("Refresh token", "Токен обновления"), &mut editor.refresh_token, lang.text("Session only", "Только для этого сеанса"), true);
+                                        field(ui, lang, lang.text("Maximum access token lifetime (seconds)", "Предельный срок действия токена доступа (секунды)"), &mut editor.max_token_seconds, "300", false);
+                                        if editor.protocol != "SASL_SSL" {
+                                            ui.colored_label(accent(self.dark()), lang.text("Choose SASL_SSL on Connection to use a refresh token", "Для токена обновления выберите SASL_SSL на вкладке «Подключение»"));
+                                        }
+                                    } else {
+                                        field(ui, lang, lang.text("Username", "Имя пользователя"), &mut editor.username, lang.text("Kafka principal", "Пользователь Kafka"), false);
+                                        field(ui, lang, lang.text("Password", "Пароль"), &mut editor.password, lang.text("Session only", "Только для этого сеанса"), true);
+                                        if !editor.protocol.starts_with("SASL") { ui.label(RichText::new(lang.text("Choose SASL_SSL or SASL_PLAINTEXT on Connection to use these credentials.", "Чтобы использовать эти данные, выберите SASL_SSL или SASL_PLAINTEXT на вкладке «Подключение».")).color(accent(self.dark()))); }
+                                    }
                                 }
                                 2 => {
                                     ui.label(RichText::new(lang.text("TLS certificates", "Сертификаты TLS")).strong()); ui.small(lang.text("Certificate and hostname verification are enabled by default.", "Проверка сертификата и имени хоста включена по умолчанию.")); ui.add_space(12.);
-                                    field(ui, lang.text("CA certificate · PEM path", "Сертификат центра сертификации · путь к файлу PEM"), &mut editor.ca, "C:/certs/ca.pem", false);
-                                    field(ui, lang.text("Client certificate · optional PEM path", "Сертификат клиента · путь к файлу PEM (необязательно)"), &mut editor.certificate, "C:/certs/client.pem", false);
-                                    field(ui, lang.text("Client private key · optional PEM path", "Закрытый ключ клиента · путь к файлу PEM (необязательно)"), &mut editor.key, "C:/certs/client-key.pem", false);
-                                    field(ui, lang.text("Private-key password · session only", "Пароль закрытого ключа · только для этого сеанса"), &mut editor.key_password, lang.text("Only for an encrypted private key", "Для зашифрованного закрытого ключа"), true);
+                                    field(ui, lang, lang.text("CA certificate · PEM path", "Сертификат центра сертификации · путь к файлу PEM"), &mut editor.ca, "C:/certs/ca.pem", false);
+                                    field(ui, lang, lang.text("Client certificate · optional PEM path", "Сертификат клиента · путь к файлу PEM (необязательно)"), &mut editor.certificate, "C:/certs/client.pem", false);
+                                    field(ui, lang, lang.text("Client private key · optional PEM path", "Закрытый ключ клиента · путь к файлу PEM (необязательно)"), &mut editor.key, "C:/certs/client-key.pem", false);
+                                    field(ui, lang, lang.text("Private-key password · session only", "Пароль закрытого ключа · только для этого сеанса"), &mut editor.key_password, lang.text("Only for an encrypted private key", "Для зашифрованного закрытого ключа"), true);
                                     ui.small(lang.text("Paths can be saved. Inline private keys and key passwords are omitted from workspace/profile exports.", "Пути к файлам сохраняются. Содержимое закрытых ключей и пароли остаются только в памяти."));
                                 }
                                 _ => {
-                                    ui.label(lang.text("Additional librdkafka properties", "Дополнительные параметры librdkafka"));
-                                    ui.add(egui::TextEdit::multiline(&mut editor.advanced).code_editor().desired_width(f32::INFINITY).desired_rows(7).hint_text("isolation.level=read_committed"));
+                                    paste_edit(ui, lang, lang.text("Additional librdkafka properties", "Дополнительные параметры librdkafka"), egui::TextEdit::multiline(&mut editor.advanced).code_editor().desired_rows(7).hint_text("isolation.level=read_committed"), clipboard_text);
                                     ui.small(lang.text("Literal UTF-8 key=value, one property per line. Read-only safety overrides remain enforced.", "Формат UTF-8: ключ=значение, по одному параметру в строке. Приложение сохраняет режим только для чтения."));
                                     ui.add_space(14.); ui.separator(); ui.add_space(8.);
-                                    ui.label(RichText::new(lang.text("Import / export connection profile", "Импорт и экспорт профиля подключения")).strong());
-                                    ui.add(egui::TextEdit::singleline(&mut editor.file_path).desired_width(f32::INFINITY).hint_text("server.properties"));
+                                    field(ui, lang, lang.text("Import / export connection profile", "Импорт и экспорт профиля подключения"), &mut editor.file_path, "server.properties", false);
                                     ui.horizontal(|ui| { if ui.button(lang.text("Import into draft", "Импорт в черновик")).clicked() { editor.import(lang); } if ui.button(lang.text("Export safe profile", "Экспорт без учётных данных")).clicked() { editor.export(lang); } });
                                     ui.small(lang.text("Imports change this draft only. Export omits session credentials. Existing export files are not overwritten.", "Импорт изменяет только черновик. Для экспорта выберите новый файл. Учётные данные сеанса в него не попадут."));
                                 }
@@ -544,7 +651,7 @@ impl ReaderApp {
                 let mut action = if ui.input(|i|i.viewport().close_requested()) { Action::Cancel } else { Action::None };
                 egui::CentralPanel::default().frame(egui::Frame::new().fill(panel(self.dark())).inner_margin(22)).show(ui, |ui| {
                     ui.heading(lang.text("Register a topic", "Добавить топик")); ui.label(lang.text("Enter the exact name you have access to. No cluster-wide listing is requested.", "Введите точное имя доступного вам топика. Приложение не запрашивает список топиков кластера.")); ui.add_space(12.);
-                    field(ui,lang.text("Topic name", "Имя топика"),&mut editor.name,"orders.events",false); ui.label(RichText::new(&editor.error).small());
+                    field(ui,lang,lang.text("Topic name", "Имя топика"),&mut editor.name,"orders.events",false); ui.label(RichText::new(&editor.error).small());
                     ui.horizontal(|ui| { if ui.button(lang.text("Add and open", "Добавить и открыть")).clicked(){action=Action::Save;} if ui.button(lang.text("Cancel", "Отмена")).clicked(){action=Action::Cancel;} });
                 }); action
             });
@@ -597,6 +704,7 @@ impl ReaderApp {
                             ui.add_space(12.);
                             field(
                                 ui,
+                                lang,
                                 lang.text("New output filename", "Имя нового файла"),
                                 &mut editor.path,
                                 "records.jsonl",
@@ -622,15 +730,109 @@ impl ReaderApp {
         }
     }
 }
-fn field(ui: &mut egui::Ui, label: &str, value: &mut String, hint: &str, password: bool) {
-    ui.label(label);
-    ui.add(
+fn field(
+    ui: &mut egui::Ui,
+    lang: Language,
+    label: &str,
+    value: &mut String,
+    hint: &str,
+    password: bool,
+) {
+    paste_edit(
+        ui,
+        lang,
+        label,
         egui::TextEdit::singleline(value)
             .hint_text(hint)
-            .password(password)
-            .desired_width(f32::INFINITY),
+            .password(password),
+        clipboard_text,
     );
     ui.add_space(11.);
+}
+
+fn clipboard_text() -> Option<String> {
+    arboard::Clipboard::new().ok()?.get_text().ok()
+}
+
+fn paste_edit(
+    ui: &mut egui::Ui,
+    lang: Language,
+    label: &str,
+    edit: egui::TextEdit<'_>,
+    read_clipboard: impl FnOnce() -> Option<String>,
+) -> egui::Response {
+    let field_id = ui.make_persistent_id(("text-field", label));
+    let error_id = field_id.with("paste-error");
+    let (label_id, button) = ui
+        .horizontal(|ui| {
+            let label_id = ui.label(label).id;
+            let help = format!("{} · {label}", lang.text("Paste", "Вставить"));
+            let button = ui
+                .add(egui::Button::new("").small().min_size(egui::vec2(26., 16.)))
+                .on_hover_text(&help);
+            let center = button.rect.center();
+            let ink = ui.visuals().text_color();
+            let board =
+                egui::Rect::from_center_size(center + egui::vec2(0., 1.), egui::vec2(10., 11.));
+            ui.painter()
+                .rect_stroke(board, 1., (1., ink), egui::StrokeKind::Inside);
+            let clip =
+                egui::Rect::from_center_size(center + egui::vec2(0., -4.5), egui::vec2(6., 3.));
+            ui.painter().rect_filled(clip, 1., ink);
+            ui.painter()
+                .hline(center.x - 2.5..=center.x + 2.5, center.y + 1., (1., ink));
+            button.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Button, button.enabled(), &help)
+            });
+            (label_id, button)
+        })
+        .inner;
+    let focus_policy = (button.is_pointer_button_down_on() || button.clicked()).then(|| {
+        ui.memory_mut(|mem| mem.request_focus(field_id));
+        // The adjacent icon acts as part of the field. Otherwise TextEdit
+        // surrenders focus to this same click before handling the paste event.
+        ui.ctx().options_mut(|options| {
+            std::mem::replace(
+                &mut options.input_options.surrender_focus_on,
+                egui::SurrenderFocusOn::Never,
+            )
+        })
+    });
+    // Immediate child windows in eframe/glow 0.37 do not drain RequestPaste.
+    // Deliver the click to this editor using the same paste event as Ctrl+V.
+    let previous_events = if button.clicked() {
+        let text = read_clipboard().filter(|s| !s.is_empty());
+        ui.data_mut(|data| data.insert_temp(error_id, text.is_none()));
+        text.map(|s| {
+            ui.input_mut(|input| {
+                std::mem::replace(
+                    &mut input.events,
+                    vec![egui::Event::Paste(s.replace("\r\n", "\n"))],
+                )
+            })
+        })
+    } else {
+        None
+    };
+    let response = ui
+        .add(edit.id(field_id).desired_width(f32::INFINITY))
+        .labelled_by(label_id);
+    if let Some(policy) = focus_policy {
+        ui.ctx()
+            .options_mut(|options| options.input_options.surrender_focus_on = policy);
+    }
+    if let Some(events) = previous_events {
+        ui.input_mut(|input| input.events = events);
+    }
+    if response.changed() {
+        ui.data_mut(|data| data.remove::<bool>(error_id));
+    } else if ui.data(|data| data.get_temp::<bool>(error_id).unwrap_or(false)) {
+        ui.small(lang.text(
+            "Clipboard text is unavailable",
+            "Текст из буфера обмена недоступен",
+        ));
+    }
+    button
 }
 fn section(ui: &mut egui::Ui, title: &str, dark: bool) {
     ui.label(RichText::new(title).strong().color(accent(dark)));
@@ -899,6 +1101,134 @@ mod tests {
         assert!(!server.properties.contains_key("sasl.username"));
         assert!(!serde_json::to_string(&server).unwrap().contains("SENTINEL"));
     }
+    #[test]
+    fn paste_button_replaces_a_unicode_selection_in_its_masked_field() {
+        use egui::text::{CCursor, CCursorRange};
+        let ctx = egui::Context::default();
+        let mut password = "до☃после".to_string();
+        let mut untouched = "other".to_string();
+        let mut reads = 0;
+        let mut frame = |events| {
+            let mut target = None;
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let button = paste_edit(
+                            ui,
+                            Language::Russian,
+                            "Пароль",
+                            egui::TextEdit::singleline(&mut password).password(true),
+                            || {
+                                reads += 1;
+                                Some("🦀ключ".into())
+                            },
+                        );
+                        target = Some((
+                            ui.make_persistent_id(("text-field", "Пароль")),
+                            button.rect.center(),
+                        ));
+                        paste_edit(
+                            ui,
+                            Language::Russian,
+                            "Другой",
+                            egui::TextEdit::singleline(&mut untouched),
+                            || panic!("unselected field read the clipboard"),
+                        );
+                    });
+                },
+            );
+            target.unwrap()
+        };
+        let (field, pos) = frame(vec![]);
+        ctx.memory_mut(|mem| mem.request_focus(field));
+        let mut state = egui::TextEdit::load_state(&ctx, field).unwrap();
+        state
+            .cursor
+            .set_char_range(Some(CCursorRange::two(CCursor::new(2), CCursor::new(3))));
+        egui::TextEdit::store_state(&ctx, field, state);
+        let mouse = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![egui::Event::PointerMoved(pos), mouse(true)]);
+        frame(vec![mouse(false)]);
+        assert_eq!(reads, 1);
+        assert_eq!(password, "до🦀ключпосле");
+        assert_eq!(untouched, "other");
+        assert!(ctx.memory(|mem| mem.has_focus(field)));
+    }
+
+    #[test]
+    fn refresh_token_profile_roundtrips_with_only_its_own_credentials() {
+        let mut app = test_app();
+        app.open_server(None);
+        let mut editor = app.server_editor.take().unwrap();
+        editor.name = "OAuth".into();
+        editor.brokers = "kafka.example.org:9093".into();
+        editor.protocol = "SASL_SSL".into();
+        editor.mechanism = "OAUTHBEARER".into();
+        editor.oauth_endpoint = "https://sso.example.org/token".into();
+        editor.refresh_token = "REFRESH_SENTINEL".into();
+        editor.username = "LOGIN_SENTINEL".into();
+        editor.password = "PASSWORD_SENTINEL".into();
+        editor.advanced = "sasl.username=inactive\nsasl.password=inactive".into();
+        app.save_server(&editor).unwrap();
+        let server = app.workspace.servers.last().unwrap();
+        let id = server.id;
+        let props = session_properties(server, &app.credentials);
+        assert!(app.oauth_sessions[&id].matches(&props));
+        assert_eq!(
+            server.properties["oauth.token.endpoint.uri"],
+            editor.oauth_endpoint
+        );
+        assert_eq!(server.properties["oauth.client.id"], "kafka-cli");
+        assert_eq!(server.properties["oauth.max.token.expiry.seconds"], "300");
+        assert_eq!(
+            app.credentials[&id],
+            Properties::from([("oauth.refresh.token".into(), "REFRESH_SENTINEL".into())])
+        );
+        let on_disk = fs::read_to_string(app.options.store.path()).unwrap();
+        assert!(!on_disk.contains("SENTINEL"));
+        app.open_server(Some(id));
+        let mut reopened = app.server_editor.take().unwrap();
+        assert!(reopened.oauth_session.matches(&props));
+        reopened.refresh_token = "different-account".into();
+        app.save_server(&reopened).unwrap();
+        let changed_props = session_properties(app.workspace.server(id).unwrap(), &app.credentials);
+        assert!(app.oauth_sessions[&id].matches(&changed_props));
+        assert!(!app.oauth_sessions[&id].matches(&props));
+        app.open_server(Some(id));
+        let mut reopened = app.server_editor.take().unwrap();
+        assert_eq!(reopened.refresh_token, "different-account");
+        assert!(reopened.advanced.is_empty());
+        reopened.refresh_token.clear();
+        assert!(
+            reopened.build(Language::English).is_ok(),
+            "saving a profile allows entering the token later"
+        );
+        reopened.refresh_token = "INACTIVE_TOKEN".into();
+        reopened.mechanism = "SCRAM-SHA-256".into();
+        reopened.username = "reader".into();
+        reopened.password = "password".into();
+        reopened.advanced = "oauth.refresh.token=inactive".into();
+        let (scram, secrets) = reopened.build(Language::English).unwrap();
+        assert_eq!(secrets["sasl.username"], "reader");
+        assert_eq!(secrets["sasl.password"], "password");
+        assert!(
+            !scram
+                .properties
+                .keys()
+                .chain(secrets.keys())
+                .any(|key| key.starts_with("oauth."))
+        );
+    }
+
     #[test]
     fn imported_profile_remains_a_draft_until_save() {
         let original = Server {

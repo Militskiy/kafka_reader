@@ -34,6 +34,17 @@
     ]
   },
   {
+    "name": "arboard",
+    "version": "3.7.0",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/1Password/arboard",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/arboard-3.7.0/LICENSE-APACHE.txt",
+      "cargo/arboard-3.7.0/LICENSE-MIT.txt"
+    ]
+  },
+  {
     "name": "arrayvec",
     "version": "0.7.8",
     "license": "MIT OR Apache-2.0",
@@ -75,6 +86,28 @@
     "licenseFiles": [
       "cargo/base64-0.22.1/LICENSE-APACHE",
       "cargo/base64-0.22.1/LICENSE-MIT"
+    ]
+  },
+  {
+    "name": "base64",
+    "version": "0.23.1",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/marshallpierce/rust-base64",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/base64-0.23.1/LICENSE-APACHE",
+      "cargo/base64-0.23.1/LICENSE-MIT"
+    ]
+  },
+  {
+    "name": "base64ct",
+    "version": "1.8.3",
+    "license": "Apache-2.0 OR MIT",
+    "repository": "https://github.com/RustCrypto/formats",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/base64ct-1.8.3/LICENSE-APACHE",
+      "cargo/base64ct-1.8.3/LICENSE-MIT"
     ]
   },
   {
@@ -145,6 +178,16 @@
     ]
   },
   {
+    "name": "bytes",
+    "version": "1.12.2",
+    "license": "MIT",
+    "repository": "https://github.com/tokio-rs/bytes",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/bytes-1.12.2/LICENSE"
+    ]
+  },
+  {
     "name": "calloop",
     "version": "0.13.0",
     "license": "MIT",
@@ -152,6 +195,26 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "licenseFiles": [
       "cargo/calloop-0.13.0/LICENSE.txt"
+    ]
+  },
+  {
+    "name": "calloop",
+    "version": "0.14.5",
+    "license": "MIT",
+    "repository": "https://github.com/Smithay/calloop",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/calloop-0.14.5/LICENSE.txt"
+    ]
+  },
+  {
+    "name": "calloop-wayland-source",
+    "version": "0.4.1",
+    "license": "MIT",
+    "repository": "https://github.com/smithay/calloop-wayland-source",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/calloop-wayland-source-0.4.1/LICENSE.txt"
     ]
   },
   {
@@ -194,6 +257,16 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "licenseFiles": [
       "cargo/chrono-0.4.45/LICENSE.txt"
+    ]
+  },
+  {
+    "name": "clipboard-win",
+    "version": "5.4.3",
+    "license": "BSL-1.0",
+    "repository": "https://github.com/DoumanAsh/clipboard-win",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "upstream/clipboard-win/LICENSE"
     ]
   },
   {
@@ -275,6 +348,17 @@
     ]
   },
   {
+    "name": "der",
+    "version": "0.8.3",
+    "license": "Apache-2.0 OR MIT",
+    "repository": "https://github.com/RustCrypto/formats",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/der-0.8.3/LICENSE-APACHE",
+      "cargo/der-0.8.3/LICENSE-MIT"
+    ]
+  },
+  {
     "name": "dlib",
     "version": "0.5.3",
     "license": "MIT",
@@ -293,6 +377,17 @@
     "licenseFiles": [
       "cargo/document-features-0.2.12/LICENSE-APACHE",
       "cargo/document-features-0.2.12/LICENSE-MIT"
+    ]
+  },
+  {
+    "name": "downcast-rs",
+    "version": "1.2.1",
+    "license": "MIT/Apache-2.0",
+    "repository": "https://github.com/marcianx/downcast-rs",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/downcast-rs-1.2.1/LICENSE-APACHE",
+      "cargo/downcast-rs-1.2.1/LICENSE-MIT"
     ]
   },
   {
@@ -440,6 +535,16 @@
     ]
   },
   {
+    "name": "error-code",
+    "version": "3.4.0",
+    "license": "BSL-1.0",
+    "repository": "https://github.com/DoumanAsh/error-code",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/error-code-3.4.0/LICENSE"
+    ]
+  },
+  {
     "name": "euclid",
     "version": "0.22.14",
     "license": "MIT OR Apache-2.0",
@@ -449,6 +554,16 @@
       "cargo/euclid-0.22.14/COPYRIGHT",
       "cargo/euclid-0.22.14/LICENSE-APACHE",
       "cargo/euclid-0.22.14/LICENSE-MIT"
+    ]
+  },
+  {
+    "name": "fax",
+    "version": "0.2.7",
+    "license": "MIT",
+    "repository": "https://github.com/pdf-rs/fax",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/fax-0.2.7/LICENSE"
     ]
   },
   {
@@ -514,6 +629,28 @@
     "licenseFiles": [
       "cargo/font-types-0.12.7/LICENSE-APACHE",
       "cargo/font-types-0.12.7/LICENSE-MIT"
+    ]
+  },
+  {
+    "name": "foreign-types",
+    "version": "0.3.2",
+    "license": "MIT/Apache-2.0",
+    "repository": "https://github.com/sfackler/foreign-types",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/foreign-types-0.3.2/LICENSE-APACHE",
+      "cargo/foreign-types-0.3.2/LICENSE-MIT"
+    ]
+  },
+  {
+    "name": "foreign-types-shared",
+    "version": "0.1.1",
+    "license": "MIT/Apache-2.0",
+    "repository": "https://github.com/sfackler/foreign-types",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/foreign-types-shared-0.1.1/LICENSE-APACHE",
+      "cargo/foreign-types-shared-0.1.1/LICENSE-MIT"
     ]
   },
   {
@@ -705,6 +842,28 @@
     "licenseFiles": [
       "cargo/hashbrown-0.17.1/LICENSE-APACHE",
       "cargo/hashbrown-0.17.1/LICENSE-MIT"
+    ]
+  },
+  {
+    "name": "http",
+    "version": "1.5.0",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/hyperium/http",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/http-1.5.0/LICENSE-APACHE",
+      "cargo/http-1.5.0/LICENSE-MIT"
+    ]
+  },
+  {
+    "name": "httparse",
+    "version": "1.10.1",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/seanmonstar/httparse",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/httparse-1.10.1/LICENSE-APACHE",
+      "cargo/httparse-1.10.1/LICENSE-MIT"
     ]
   },
   {
@@ -922,6 +1081,17 @@
     ]
   },
   {
+    "name": "memmap2",
+    "version": "0.9.12",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/RazrFalcon/memmap2-rs",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/memmap2-0.9.12/LICENSE-APACHE",
+      "cargo/memmap2-0.9.12/LICENSE-MIT"
+    ]
+  },
+  {
     "name": "miniz_oxide",
     "version": "0.8.9",
     "license": "MIT OR Zlib OR Apache-2.0",
@@ -978,6 +1148,17 @@
     "licenseFiles": [
       "cargo/naga-types-30.0.2/LICENSE.APACHE",
       "cargo/naga-types-30.0.2/LICENSE.MIT"
+    ]
+  },
+  {
+    "name": "native-tls",
+    "version": "0.2.18",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/rust-native-tls/rust-native-tls",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/native-tls-0.2.18/LICENSE-APACHE",
+      "cargo/native-tls-0.2.18/LICENSE-MIT"
     ]
   },
   {
@@ -1038,6 +1219,39 @@
     ]
   },
   {
+    "name": "openssl",
+    "version": "0.10.82",
+    "license": "Apache-2.0",
+    "repository": "https://github.com/rust-openssl/rust-openssl",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/openssl-0.10.82/LICENSE",
+      "cargo/openssl-0.10.82/LICENSE-APACHE"
+    ]
+  },
+  {
+    "name": "openssl-macros",
+    "version": "0.1.1",
+    "license": "MIT/Apache-2.0",
+    "repository": null,
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/openssl-macros-0.1.1/LICENSE-APACHE",
+      "cargo/openssl-macros-0.1.1/LICENSE-MIT"
+    ]
+  },
+  {
+    "name": "openssl-probe",
+    "version": "0.2.2",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/rustls/openssl-probe",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/openssl-probe-0.2.2/LICENSE-APACHE",
+      "cargo/openssl-probe-0.2.2/LICENSE-MIT"
+    ]
+  },
+  {
     "name": "openssl-src",
     "version": "300.6.1+3.6.3",
     "license": "MIT/Apache-2.0",
@@ -1080,6 +1294,17 @@
     "licenseFiles": [
       "cargo/parking_lot_core-0.9.12/LICENSE-APACHE",
       "cargo/parking_lot_core-0.9.12/LICENSE-MIT"
+    ]
+  },
+  {
+    "name": "pem-rfc7468",
+    "version": "1.0.0",
+    "license": "Apache-2.0 OR MIT",
+    "repository": "https://github.com/RustCrypto/formats",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/pem-rfc7468-1.0.0/LICENSE-APACHE",
+      "cargo/pem-rfc7468-1.0.0/LICENSE-MIT"
     ]
   },
   {
@@ -1201,6 +1426,27 @@
     "licenseFiles": [
       "cargo/pxfm-0.1.30/LICENSE-APACHE.md",
       "cargo/pxfm-0.1.30/LICENSE.md"
+    ]
+  },
+  {
+    "name": "quick-error",
+    "version": "2.0.1",
+    "license": "MIT/Apache-2.0",
+    "repository": "http://github.com/tailhook/quick-error",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/quick-error-2.0.1/LICENSE-APACHE",
+      "cargo/quick-error-2.0.1/LICENSE-MIT"
+    ]
+  },
+  {
+    "name": "quick-xml",
+    "version": "0.41.0",
+    "license": "MIT",
+    "repository": "https://github.com/tafia/quick-xml",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/quick-xml-0.41.0/LICENSE-MIT.md"
     ]
   },
   {
@@ -1334,6 +1580,17 @@
     ]
   },
   {
+    "name": "rustls-pki-types",
+    "version": "1.16.0",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/rustls/pki-types",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/rustls-pki-types-1.16.0/LICENSE-APACHE",
+      "cargo/rustls-pki-types-1.16.0/LICENSE-MIT"
+    ]
+  },
+  {
     "name": "rustversion",
     "version": "1.0.23",
     "license": "MIT OR Apache-2.0",
@@ -1342,6 +1599,27 @@
     "licenseFiles": [
       "cargo/rustversion-1.0.23/LICENSE-APACHE",
       "cargo/rustversion-1.0.23/LICENSE-MIT"
+    ]
+  },
+  {
+    "name": "schannel",
+    "version": "0.1.30",
+    "license": "MIT",
+    "repository": "https://github.com/steffengy/schannel-rs",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/schannel-0.1.30/LICENSE.md"
+    ]
+  },
+  {
+    "name": "scoped-tls",
+    "version": "1.0.1",
+    "license": "MIT/Apache-2.0",
+    "repository": "https://github.com/alexcrichton/scoped-tls",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/scoped-tls-1.0.1/LICENSE-APACHE",
+      "cargo/scoped-tls-1.0.1/LICENSE-MIT"
     ]
   },
   {
@@ -1464,6 +1742,26 @@
     ]
   },
   {
+    "name": "smithay-client-toolkit",
+    "version": "0.20.0",
+    "license": "MIT",
+    "repository": "https://github.com/smithay/client-toolkit",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/smithay-client-toolkit-0.20.0/LICENSE.txt"
+    ]
+  },
+  {
+    "name": "smithay-clipboard",
+    "version": "0.7.3",
+    "license": "MIT",
+    "repository": "https://github.com/smithay/smithay-clipboard",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/smithay-clipboard-0.7.3/LICENSE"
+    ]
+  },
+  {
     "name": "smol_str",
     "version": "0.2.2",
     "license": "MIT OR Apache-2.0",
@@ -1549,6 +1847,17 @@
     "licenseFiles": [
       "cargo/thiserror-impl-2.0.21/LICENSE-APACHE",
       "cargo/thiserror-impl-2.0.21/LICENSE-MIT"
+    ]
+  },
+  {
+    "name": "tiff",
+    "version": "0.11.3",
+    "license": "MIT",
+    "repository": "https://github.com/image-rs/image-tiff",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/tiff-0.11.3/LICENSE",
+      "cargo/tiff-0.11.3/tests/COPYRIGHT"
     ]
   },
   {
@@ -1676,6 +1985,39 @@
     ]
   },
   {
+    "name": "ureq",
+    "version": "3.5.2",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/algesten/ureq",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/ureq-3.5.2/LICENSE-APACHE",
+      "cargo/ureq-3.5.2/LICENSE-MIT"
+    ]
+  },
+  {
+    "name": "ureq-proto",
+    "version": "0.7.1",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/algesten/ureq-proto",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/ureq-proto-0.7.1/LICENSE-APACHE.txt",
+      "cargo/ureq-proto-0.7.1/LICENSE-MIT.txt"
+    ]
+  },
+  {
+    "name": "utf8-zero",
+    "version": "0.8.1",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/algesten/utf8-zero",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/utf8-zero-0.8.1/LICENSE-APACHE",
+      "cargo/utf8-zero-0.8.1/LICENSE-MIT"
+    ]
+  },
+  {
     "name": "uuid",
     "version": "1.29.3",
     "license": "Apache-2.0 OR MIT",
@@ -1731,6 +2073,107 @@
     ]
   },
   {
+    "name": "wayland-backend",
+    "version": "0.3.17",
+    "license": "MIT",
+    "repository": "https://github.com/smithay/wayland-rs",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/wayland-backend-0.3.17/LICENSE.txt"
+    ]
+  },
+  {
+    "name": "wayland-client",
+    "version": "0.31.15",
+    "license": "MIT",
+    "repository": "https://github.com/smithay/wayland-rs",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/wayland-client-0.31.15/LICENSE.txt"
+    ]
+  },
+  {
+    "name": "wayland-csd-frame",
+    "version": "0.3.0",
+    "license": "MIT",
+    "repository": "https://github.com/rust-windowing/wayland-csd-frame",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/wayland-csd-frame-0.3.0/LICENSE"
+    ]
+  },
+  {
+    "name": "wayland-cursor",
+    "version": "0.31.14",
+    "license": "MIT",
+    "repository": "https://github.com/smithay/wayland-rs",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/wayland-cursor-0.31.14/LICENSE.txt"
+    ]
+  },
+  {
+    "name": "wayland-protocols",
+    "version": "0.32.13",
+    "license": "MIT",
+    "repository": "https://github.com/smithay/wayland-rs",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/wayland-protocols-0.32.13/LICENSE.txt",
+      "cargo/wayland-protocols-0.32.13/protocols/COPYING"
+    ]
+  },
+  {
+    "name": "wayland-protocols-experimental",
+    "version": "20250721.0.1",
+    "license": "MIT",
+    "repository": "https://github.com/smithay/wayland-rs",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/wayland-protocols-experimental-20250721.0.1/LICENSE.txt"
+    ]
+  },
+  {
+    "name": "wayland-protocols-misc",
+    "version": "0.3.12",
+    "license": "MIT",
+    "repository": "https://github.com/smithay/wayland-rs",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/wayland-protocols-misc-0.3.12/LICENSE.txt"
+    ]
+  },
+  {
+    "name": "wayland-protocols-wlr",
+    "version": "0.3.12",
+    "license": "MIT",
+    "repository": "https://github.com/smithay/wayland-rs",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/wayland-protocols-wlr-0.3.12/LICENSE.txt"
+    ]
+  },
+  {
+    "name": "wayland-scanner",
+    "version": "0.31.11",
+    "license": "MIT",
+    "repository": "https://github.com/smithay/wayland-rs",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/wayland-scanner-0.31.11/LICENSE.txt"
+    ]
+  },
+  {
+    "name": "wayland-sys",
+    "version": "0.31.11",
+    "license": "MIT",
+    "repository": "https://github.com/smithay/wayland-rs",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/wayland-sys-0.31.11/LICENSE.txt"
+    ]
+  },
+  {
     "name": "web-time",
     "version": "1.1.0",
     "license": "MIT OR Apache-2.0",
@@ -1739,6 +2182,17 @@
     "licenseFiles": [
       "cargo/web-time-1.1.0/LICENSE-APACHE",
       "cargo/web-time-1.1.0/LICENSE-MIT"
+    ]
+  },
+  {
+    "name": "weezl",
+    "version": "0.1.12",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/image-rs/weezl",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/weezl-0.1.12/LICENSE-APACHE",
+      "cargo/weezl-0.1.12/LICENSE-MIT"
     ]
   },
   {
@@ -1915,6 +2369,16 @@
     ]
   },
   {
+    "name": "xcursor",
+    "version": "0.3.11",
+    "license": "MIT",
+    "repository": "https://github.com/esposm03/xcursor-rs",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/xcursor-0.3.11/LICENSE"
+    ]
+  },
+  {
     "name": "xkbcommon-dl",
     "version": "0.4.2",
     "license": "MIT",
@@ -1971,6 +2435,17 @@
     ]
   },
   {
+    "name": "zeroize",
+    "version": "1.9.2",
+    "license": "Apache-2.0 OR MIT",
+    "repository": "https://github.com/RustCrypto/utils",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/zeroize-1.9.2/LICENSE-APACHE",
+      "cargo/zeroize-1.9.2/LICENSE-MIT"
+    ]
+  },
+  {
     "name": "zlib-rs",
     "version": "0.6.8",
     "license": "Zlib",
@@ -2002,6 +2477,30 @@
       "cargo/zstd-sys-2.1.3+zstd.1.5.7/LICENSE.BSD-3-Clause",
       "cargo/zstd-sys-2.1.3+zstd.1.5.7/zstd/COPYING",
       "cargo/zstd-sys-2.1.3+zstd.1.5.7/zstd/LICENSE"
+    ]
+  },
+  {
+    "name": "zune-core",
+    "version": "0.5.3",
+    "license": "MIT OR Apache-2.0 OR Zlib",
+    "repository": "https://github.com/etemesi254/zune-image",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/zune-core-0.5.3/LICENSE-APACHE",
+      "cargo/zune-core-0.5.3/LICENSE-MIT",
+      "cargo/zune-core-0.5.3/LICENSE-ZLIB"
+    ]
+  },
+  {
+    "name": "zune-jpeg",
+    "version": "0.5.15",
+    "license": "MIT OR Apache-2.0 OR Zlib",
+    "repository": "https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "licenseFiles": [
+      "cargo/zune-jpeg-0.5.15/LICENSE-APACHE",
+      "cargo/zune-jpeg-0.5.15/LICENSE-MIT",
+      "cargo/zune-jpeg-0.5.15/LICENSE-ZLIB"
     ]
   }
 ]

@@ -8,7 +8,7 @@ such as `MIT OR Apache-2.0` do not require choosing every alternative.
 ## Rust dependencies
 
 `THIRD-PARTY/DEPENDENCIES.md` and `THIRD-PARTY/dependency-inventory.json` record the
-180 packages in the union of the locked Linux/Windows metadata graphs, including
+227 packages in the union of the locked Linux/Windows metadata graphs, including
 build dependencies and optional entries that need not all be linked into the
 delivered executable. `Cargo.lock` is the authoritative version lockfile.
 
@@ -19,7 +19,7 @@ upstream, Rust and MinGW notices. Some upstream workspaces do not include a lice
 each published member crate. Their original shared license texts are retained
 under `THIRD-PARTY/upstream/`, with the exact upstream commit URLs in
 `THIRD-PARTY/upstream/ORIGINS.json`. These cover the egui workspace, AccessKit,
-gl-rs and profiling. The egui default font licenses, including OFL and Ubuntu
+gl-rs, profiling and clipboard-win. The egui default font licenses, including OFL and Ubuntu
 Font License texts, are preserved in the `epaint_default_fonts` entry.
 
 Major components:

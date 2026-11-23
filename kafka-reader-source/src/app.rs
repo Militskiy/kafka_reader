@@ -8,7 +8,7 @@ use eframe::egui::{self, Color32, RichText};
 use kafka_reader_rust::{
     language::Language,
     model::*,
-    reader::{Event, Session},
+    reader::{Event, OAuthSession, Session},
     workspace::*,
 };
 use presentation::{
@@ -140,6 +140,7 @@ pub struct ReaderApp {
     workspace: Workspace,
     persistence_error: Option<String>,
     credentials: BTreeMap<u64, Properties>,
+    oauth_sessions: BTreeMap<u64, OAuthSession>,
     view: TopicView,
     cached: BTreeMap<Tab, TopicView>,
     cache_order: VecDeque<Tab>,
@@ -202,6 +203,7 @@ impl ReaderApp {
             workspace,
             persistence_error,
             credentials: BTreeMap::new(),
+            oauth_sessions: BTreeMap::new(),
             view,
             cached: BTreeMap::new(),
             cache_order: VecDeque::new(),
@@ -501,7 +503,14 @@ impl ReaderApp {
                     "Connecting to the selected topic".into()
                 };
                 self.notice.clear();
-                self.session = Some(Session::start(request));
+                let server_id = self
+                    .active()
+                    .expect("request requires an active tab")
+                    .server;
+                self.session = Some(Session::start_with_oauth(
+                    request,
+                    self.oauth_sessions.entry(server_id).or_default(),
+                ));
             }
             Err(e) => {
                 self.view.state = "CHECK SETTINGS".into();
@@ -2108,6 +2117,7 @@ impl eframe::App for ReaderApp {
             s.stop();
         }
         self.credentials.clear();
+        self.oauth_sessions.clear();
     }
 }
 

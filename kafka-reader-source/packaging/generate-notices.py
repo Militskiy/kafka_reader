@@ -47,6 +47,7 @@ def main():
             shutil.copyfile(source, destination)
             files.append(destination.relative_to(output).as_posix())
         shared = {
+            "clipboard-win": "clipboard-win",
             "accesskit": "accesskit", "gl_generator": "gl-rs", "khronos_api": "gl-rs",
             "profiling": "profiling", "ecolor": "egui", "eframe": "egui", "egui": "egui",
             "egui-wgpu": "egui", "egui-winit": "egui", "egui_glow": "egui",

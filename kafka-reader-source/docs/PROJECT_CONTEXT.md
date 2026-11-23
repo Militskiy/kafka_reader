@@ -1,6 +1,6 @@
 # Project context and current state
 
-Snapshot: **22 November 2026**, application **0.4.0**. This is the durable
+Snapshot: **23 November 2026**, application **0.5.0**. This is the durable
 handoff for future development. Read the current code when making changes;
 update this document when an accepted decision or verified capability changes.
 
@@ -53,8 +53,9 @@ explicit user request can change them; this document is not a permanent veto.
 - Persistent real server profiles, exact topic names, favorites, open tab
   identities and application settings. Credentials and record bodies stay out
   of the saved workspace. Current workspace schema version is **2**.
-- PLAINTEXT, SSL, SASL_PLAINTEXT and SASL_SSL configuration, with PLAIN and
-  SCRAM-SHA-256/512 mechanisms and PEM certificate paths. Configuration support
+- PLAINTEXT, SSL, SASL_PLAINTEXT and SASL_SSL configuration, with PLAIN,
+  SCRAM-SHA-256/512 and OAuth refresh tokens over SASL_SSL. The server editor
+  supports native clipboard shortcuts and targeted paste buttons. Configuration support
   is separate from the live-test coverage listed below.
 
 Details and boundaries are in [ARCHITECTURE.md](ARCHITECTURE.md) and the
@@ -72,6 +73,10 @@ export edge cases. Its Windows executable carries Alexey Militskiy's self-signed
 Authenticode certificate with a DigiCert timestamp. See the
 [changelog](../CHANGELOG.md) and [signature details](../QUICKSTART.md#verify-the-windows-download).
 
+Version 0.5.0 adds OS clipboard access and refresh-token authentication for
+public OAuth clients. An OAuth token exchange runs only when the user tests or
+reads a topic. PLAIN and SCRAM remain available on password-based listeners.
+
 Old sample profiles are removed using their `offline` marker when a saved
 workspace is loaded. The cleaned state reaches disk on the next normal save.
 Do not remove profiles by the word "demo" or by server ID. A real connection
@@ -85,7 +90,7 @@ startup. The empty/reopened screenshots show ordinary behavior.
 
 ## Verification baseline and limits
 
-For version 0.4.0, consult the [release test report](../TEST-REPORT.md).
+For version 0.5.0, consult the [release test report](../TEST-REPORT.md).
 
 The delivered 0.3.0 release has recorded results for **33 unit tests, 9
 self-checks, 47 GUI assertions, 15 reopen assertions and 12 independent
@@ -114,8 +119,8 @@ switching to Russian in App settings and reopening in Russian.
 
 Other current limits:
 
-- Live TLS, mTLS and SCRAM broker configurations have not been verified.
-- No Schema Registry integration, Avro/Protobuf schema decoding, OAuth or
+- Enterprise SSO, mTLS and SCRAM broker configurations require environment-specific verification.
+- No Schema Registry integration, Avro/Protobuf schema decoding or
   Kerberos support is implemented.
 - No credential vault/keychain persistence, updater or installer.
 - No macOS/ARM release, broad accessibility/high-DPI certification, or prolonged

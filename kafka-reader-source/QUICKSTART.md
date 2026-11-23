@@ -1,4 +1,4 @@
-# Kafka Reader 0.4.0 — quick start
+# Kafka Reader 0.5.0 — quick start
 
 ## Launch
 
@@ -29,7 +29,7 @@ $signature.StatusMessage
 Get-FileHash -Algorithm SHA256 -LiteralPath .\kafka-reader.exe
 ```
 
-For 0.4.0 the certificate subject is `CN=Alexey Militskiy` and the Windows
+For 0.5.0 the certificate subject is `CN=Alexey Militskiy` and the Windows
 thumbprint is `44644A7303E549066BF4F8004E708E0473251AFB`. Compare the
 **file** hash with the `kafka-reader.exe` entry in the release's
 `SHA256SUMS.txt`. See the [release test report](TEST-REPORT.md).
@@ -39,8 +39,9 @@ thumbprint is `44644A7303E549066BF4F8004E708E0473251AFB`. Compare the
 1. Click **+ Add server** in the left sidebar.
 2. In **Connection**, enter a profile name, bootstrap addresses such as
    `broker-1:9092,broker-2:9092`, a security protocol and an exact topic name.
-3. In **Authentication**, choose PLAIN or SCRAM and enter your username/password
-   if required. In **TLS**, provide PEM CA/client-certificate/key paths where
+3. In **Authentication**, select the mechanism configured for that Kafka listener.
+   For PLAIN or SCRAM enter your username and password. For OAUTHBEARER follow
+   the refresh-token instructions below. In **TLS**, provide PEM CA/client-certificate/key paths where
    required. **Advanced** accepts additional librdkafka properties or imports a
    literal `.properties` profile.
 4. Click **Test exact topic** to check access in the background, then **Save
@@ -55,6 +56,27 @@ the initial bootstrap address. The app uses direct partition reads without a
 consumer group or offset commits. It was tested with topic READ/DESCRIBE access
 and no consumer-group permission. Kafka web UI access is not required.
 Use a broker that supports Metadata v4 (Apache Kafka 0.11 or newer).
+
+### Connect with a refresh token
+
+For a service configured with Java's `OAuthBearerLoginModule` and
+`oauth.refresh.token`, choose **SASL_SSL** under **Connection** and
+**OAUTHBEARER** under **Authentication**. Enter the HTTPS token endpoint from
+`oauth.token.endpoint.uri`, the client ID (for example `kafka-cli`), and your
+refresh token. The default maximum access-token lifetime is 300 seconds.
+Use Ctrl+V or the paste button beside the field. The token field masks the text.
+
+Use the Kafka broker hostnames and listener port for **Bootstrap servers**.
+The HTTPS token endpoint belongs in **Authentication**. If the identity provider
+uses a private CA, you can enter `oauth.ssl.ca.location=/path/to/sso-ca.pem` in
+**Advanced**. Configure the Kafka broker's CA separately in **TLS**.
+**Test exact topic** uses the credentials from the draft. Use a token issued
+for your test session. An identity provider can rotate a refresh token on its
+first use, including during a connection test. Kafka Reader keeps the replacement
+in memory. After restarting, supply a current refresh token from your provider.
+A sample profile is included in
+[examples/oauth-refresh.properties](examples/oauth-refresh.properties).
+See the [Windows authentication form](docs/screenshots/v0.5.0/windows-oauth.png) for the field layout.
 
 ## Read and inspect
 

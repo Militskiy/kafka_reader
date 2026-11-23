@@ -1,6 +1,6 @@
 //! Local workspace persistence. Session credentials never enter the serialized model.
 use crate::language::LanguagePreference;
-use crate::model::{Properties, secret_key};
+use crate::model::{Properties, sensitive_property};
 use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
@@ -326,7 +326,7 @@ impl Workspace {
 }
 
 pub fn session_only(key: &str, value: &str) -> bool {
-    secret_key(key) || key.eq_ignore_ascii_case("sasl.username") || value.contains("PRIVATE KEY")
+    sensitive_property(key, value)
 }
 pub fn validate_topic(name: &str) -> Result<(), String> {
     if name.is_empty()

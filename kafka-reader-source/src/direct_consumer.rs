@@ -5,6 +5,7 @@
 //! consume_start_queue at absolute offsets. Native allocations stay on one worker;
 //! each message is copied before destruction and handles are released in order.
 use crate::model::{Header, Record};
+use crate::oauth_context::ReaderContext;
 use rdkafka::{
     bindings as ffi,
     consumer::{BaseConsumer, Consumer},
@@ -13,7 +14,6 @@ use std::{
     collections::BTreeMap,
     ffi::{CStr, CString, c_void},
     ptr,
-    time::Duration,
 };
 
 pub enum Poll {
@@ -75,7 +75,7 @@ unsafe extern "C" fn __wrap_rd_kafka_broker_ApiVersion_supported(
 }
 
 pub struct DirectConsumer<'a> {
-    owner: &'a BaseConsumer,
+    _owner: &'a BaseConsumer<ReaderContext>,
     topic: String,
     native_topic: *mut ffi::rd_kafka_topic_t,
     queue: *mut ffi::rd_kafka_queue_t,
@@ -84,7 +84,7 @@ pub struct DirectConsumer<'a> {
 
 impl<'a> DirectConsumer<'a> {
     pub fn new(
-        owner: &'a BaseConsumer,
+        owner: &'a BaseConsumer<ReaderContext>,
         topic: &str,
         positions: &BTreeMap<i32, i64>,
     ) -> Result<Self, String> {
@@ -129,7 +129,7 @@ impl<'a> DirectConsumer<'a> {
                 return Err(last_error());
             }
             let mut reader = Self {
-                owner,
+                _owner: owner,
                 topic: topic.into(),
                 native_topic,
                 queue,
@@ -149,8 +149,6 @@ impl<'a> DirectConsumer<'a> {
     }
 
     pub fn poll(&self) -> Result<Poll, String> {
-        // Service informational client callbacks. The separate read queue owns data.
-        let _ = self.owner.poll(Duration::ZERO);
         // SAFETY: queue belongs to this adapter and only this worker polls it.
         unsafe {
             let pointer = ffi::rd_kafka_consume_queue(self.queue, 100);

@@ -359,6 +359,20 @@ impl ReaderApp {
                 self.step(7);
             }
             7 if elapsed > Duration::from_millis(1200) => {
+                let editor = self.server_editor.as_mut().unwrap();
+                editor.mechanism = "OAUTHBEARER".into();
+                editor.oauth_endpoint =
+                    "https://sso.example.org/realms/test/protocol/openid-connect/token".into();
+                editor.refresh_token = SECRET.into();
+                self.phase(
+                    "oauth",
+                    "server",
+                    dialogs::server_title(true, self.language()),
+                );
+                self.step(45);
+            }
+            45 if elapsed > Duration::from_millis(1200) => {
+                self.server_editor.as_mut().unwrap().mechanism = "SCRAM-SHA-512".into();
                 self.server_editor.as_mut().unwrap().tab = 2;
                 self.phase(
                     "tls",
