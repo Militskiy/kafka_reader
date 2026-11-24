@@ -1,6 +1,6 @@
 # Project context and current state
 
-Snapshot: **24 November 2026**, application **0.7.0** in development. This is the durable
+Snapshot: **24 November 2026**, application **0.7.0**. This is the durable
 handoff for future development. Read the current code when making changes;
 update this document when an accepted decision or verified capability changes.
 
@@ -100,8 +100,8 @@ startup. The empty/reopened screenshots show ordinary behavior.
 
 ## Verification baseline and limits
 
-The [test report](../TEST-REPORT.md) covers the 0.7.0 Windows development
-build and the published 0.6.0 release.
+The [test report](../TEST-REPORT.md) records the Windows 0.7.0 release checks
+and retains the results for the development build and earlier releases.
 
 The delivered 0.3.0 release has recorded results for **33 unit tests, 9
 self-checks, 47 GUI assertions, 15 reopen assertions and 12 independent

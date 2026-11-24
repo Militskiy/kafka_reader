@@ -241,8 +241,8 @@ features and behavior changes. Keep checks, hashes and signature details in the
 release evidence.
 
 Assign a new `MAJOR.MINOR.PATCH` version to each application release. Use a
-patch bump for fixes and a minor bump for new features. After `0.6.0`, the
-next fix-only release is `0.6.1` and the next feature release is `0.7.0`.
+patch bump for fixes and a minor bump for new features. After `0.7.0`, the
+next fix-only release is `0.7.1` and the next feature release is `0.8.0`.
 For incompatible changes during `0.x`, increment the
 minor version and explain the migration in the changelog. From `1.0.0`
 onward, use a major bump for incompatible changes.

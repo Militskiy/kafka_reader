@@ -1,5 +1,16 @@
 # Kafka Reader verification reports
 
+## 0.7.0 · Windows x64 release
+
+On 24 November 2026 the signed executable completed 9 offline checks, 49 native
+desktop checks and 20 separate-process reopen checks on Windows 11. The disposable
+Kafka fixture passed 30 checks, including password-grant renewal during an active
+read and refresh-token rotation. See the [Windows release results](qa/results/v0.7.0/windows-release.json)
+and [Kafka integration results](qa/results/v0.7.0/kafka-release-integration.json).
+
+The standalone Windows EXE has SHA-256
+`af853548e21fea320c82daba95296abb5493b05c23bbbad2f3963d7c7aebfe55`.
+
 ## 0.7.0 · Windows password-grant development build
 
 On 24 November 2026, the Windows GNU release build passed formatting, 51

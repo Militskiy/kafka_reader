@@ -1,0 +1,47 @@
+{
+  "version": "0.7.0",
+  "date": "2026-11-24",
+  "platform": "Windows-11-10.0.26300-SP0",
+  "target": "x86_64-pc-windows-gnu",
+  "binary_sha256": "af853548e21fea320c82daba95296abb5493b05c23bbbad2f3963d7c7aebfe55",
+  "build_before_signing_sha256": "f689af61c6b726858833d9cb5555b868101d041e9293b702cc9a7136477d1da1",
+  "authenticode": {
+    "publisher": "CN=Alexey Militskiy",
+    "thumbprint": "44644A7303E549066BF4F8004E708E0473251AFB",
+    "timestamp_responder": "CN=DigiCert SHA256 RSA4096 Timestamp Responder 2026 1, O=\"DigiCert, Inc.\", C=US",
+    "windows_trust_status": "UnknownError",
+    "windows_trust_message": "A certificate chain processed, but terminated in a root certificate which is not trusted by the trust provider.",
+    "timestamp_time": "Nov 24 10:04:55 2026 GMT",
+    "verification": "SHA-256 signature verified against the pinned publisher certificate and timestamp verified against public CA roots."
+  },
+  "version_output": "Kafka Reader 0.7.0 · native binary · librdkafka 2.16.0",
+  "offline_self_test": {
+    "checks": 9,
+    "librdkafka": "2.16.0",
+    "selfTest": "PASS"
+  },
+  "gui_smoke": {
+    "appVersion": "0.7.0",
+    "checks": 49,
+    "guiSmoke": "PASS",
+    "nativeChildViewport": true,
+    "openTabs": 4,
+    "retained": 120
+  },
+  "gui_reopen": {
+    "appVersion": "0.7.0",
+    "checks": 20,
+    "credentialsRestored": true,
+    "guiReopen": "PASS",
+    "language": "russian",
+    "offlineServersRestored": 0,
+    "realServersRestored": 1,
+    "recordsRestored": 0,
+    "sessionOnlyCredentialsRestored": false,
+    "sessionStarted": false
+  },
+  "apache_kafka": {
+    "checks": 30,
+    "report": "kafka-release-integration.json"
+  }
+}
