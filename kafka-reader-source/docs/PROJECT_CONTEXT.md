@@ -1,6 +1,6 @@
 # Project context and current state
 
-Snapshot: **23 November 2026**, application **0.6.0**. This is the durable
+Snapshot: **24 November 2026**, application **0.7.0** in development. This is the durable
 handoff for future development. Read the current code when making changes;
 update this document when an accepted decision or verified capability changes.
 
@@ -54,7 +54,7 @@ explicit user request can change them; this document is not a permanent veto.
   identities and application settings. Credentials and record bodies stay out
   of the saved workspace. Current workspace schema version is **2**.
 - PLAINTEXT, SSL, SASL_PLAINTEXT and SASL_SSL configuration, with PLAIN,
-  SCRAM-SHA-256/512 and OAuth refresh tokens over SASL_SSL. The server editor
+  SCRAM-SHA-256/512 and OAuth password or refresh-token grants over SASL_SSL. The server editor
   supports native clipboard shortcuts and targeted paste buttons. Configuration support
   is separate from the live-test coverage listed below.
 
@@ -83,6 +83,10 @@ credential reference is local to the workspace. Profile exports omit secrets
 and storage references. Clearing the option and saving removes the stored
 credential. Startup still makes no network requests.
 
+Version 0.7.0 adds the OAuth password grant for domain accounts. The editor
+and CLI share the same HTTPS exchange and repeat it when an access token
+needs renewal. Remembering the login and password is optional on Windows.
+
 Old sample profiles are removed using their `offline` marker when a saved
 workspace is loaded. The cleaned state reaches disk on the next normal save.
 Do not remove profiles by the word "demo" or by server ID. A real connection
@@ -96,7 +100,8 @@ startup. The empty/reopened screenshots show ordinary behavior.
 
 ## Verification baseline and limits
 
-For version 0.6.0, consult the [release test report](../TEST-REPORT.md).
+The [test report](../TEST-REPORT.md) covers the 0.7.0 Windows development
+build and the published 0.6.0 release.
 
 The delivered 0.3.0 release has recorded results for **33 unit tests, 9
 self-checks, 47 GUI assertions, 15 reopen assertions and 12 independent

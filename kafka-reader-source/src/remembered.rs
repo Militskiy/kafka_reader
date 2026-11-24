@@ -1,6 +1,7 @@
 //! Per-profile, current-user Windows DPAPI credential storage.
 use crate::{
     model::Properties,
+    oauth::OAuthGrantType,
     workspace::{Server, Store, Workspace, atomic_write},
 };
 use serde::{Deserialize, Serialize};
@@ -44,12 +45,15 @@ impl Secret {
             .get("sasl.mechanism")
             .or_else(|| server.properties.get("sasl.mechanisms"))
             .map(|v| v.to_ascii_uppercase());
-        match mechanism.as_deref().unwrap_or("PLAIN") {
-            "PLAIN" | "SCRAM-SHA-256" | "SCRAM-SHA-512" => Ok(Self::Password {
+        let password_pair = || -> Result<Self, String> {
+            Ok(Self::Password {
                 username: value("sasl.username")
-                    .ok_or("Enter the Kafka username to remember the password")?,
+                    .ok_or("Enter the username to remember the password")?,
                 password: value("sasl.password").ok_or("Enter the password to remember")?,
-            }),
+            })
+        };
+        match mechanism.as_deref().unwrap_or("PLAIN") {
+            "PLAIN" | "SCRAM-SHA-256" | "SCRAM-SHA-512" => password_pair(),
             "OAUTHBEARER" => {
                 let endpoint = property("oauth.token.endpoint.uri");
                 if !property("security.protocol").eq_ignore_ascii_case("SASL_SSL")
@@ -60,11 +64,17 @@ impl Secret {
                         .get("oauth.token.endpoint.uri")
                         .is_some_and(|v| v != endpoint)
                 {
-                    return Err("Remembering a refresh token requires SASL_SSL, a client ID and a saved HTTPS endpoint without a query".into());
+                    return Err("Remembering OAuth credentials requires SASL_SSL, a client ID and a saved HTTPS endpoint without a query".into());
                 }
-                Ok(Self::RefreshToken(
-                    value("oauth.refresh.token").ok_or("Enter the refresh token to remember")?,
-                ))
+                // The editor persists the grant type independently of the secret, so a
+                // password profile keeps its identity across restarts and sanitized exports.
+                match OAuthGrantType::from_properties(&server.properties)? {
+                    OAuthGrantType::Password => password_pair(),
+                    OAuthGrantType::RefreshToken => Ok(Self::RefreshToken(
+                        value("oauth.refresh.token")
+                            .ok_or("Enter the refresh token to remember")?,
+                    )),
+                }
             }
             _ => Err("Unsupported mechanism for a remembered credential".into()),
         }

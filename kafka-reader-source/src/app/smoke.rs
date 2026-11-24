@@ -108,6 +108,8 @@ impl ReaderApp {
                             ("sasl.password".into(), SECRET.into()),
                         ]))
                     );
+                    let props = session_properties(server, &self.credentials);
+                    assert!(self.oauth_sessions[&server.id].matches(&props));
                 } else {
                     assert!(self.credentials.is_empty());
                 }
@@ -132,7 +134,7 @@ impl ReaderApp {
                 assert_eq!(self.workspace.tabs.len(), 2);
                 assert!(self.workspace.tabs.iter().all(|t| t.server == server.id));
                 assert!(self.active().is_some_and(|t| t.server == server.id));
-                self.smoke.checks = if cfg!(windows) { 19 } else { 18 };
+                self.smoke.checks = if cfg!(windows) { 20 } else { 18 };
                 self.smoke.done = true;
                 self.phase("reopened", "main", "Kafka Reader");
                 let report = serde_json::json!({"guiReopen":"PASS","checks":self.smoke.checks,"language":self.workspace.settings.language,"sessionStarted":false,"credentialsRestored":cfg!(windows),"sessionOnlyCredentialsRestored":false,"recordsRestored":0,"offlineServersRestored":0,"realServersRestored":1,"appVersion":env!("CARGO_PKG_VERSION")});
@@ -385,7 +387,22 @@ impl ReaderApp {
                 self.step(45);
             }
             45 if elapsed > Duration::from_millis(1200) => {
-                self.server_editor.as_mut().unwrap().mechanism = "SCRAM-SHA-512".into();
+                let editor = self.server_editor.as_mut().unwrap();
+                editor.select_mechanism(
+                    "OAUTHBEARER",
+                    kafka_reader_rust::oauth::OAuthGrantType::Password,
+                );
+                editor.username = "qa-reader".into();
+                editor.password = SECRET.into();
+                editor.remember = cfg!(windows);
+                self.phase(
+                    "oauth-password",
+                    "server",
+                    dialogs::server_title(true, self.language()),
+                );
+                self.step(46);
+            }
+            46 if elapsed > Duration::from_millis(1200) => {
                 self.server_editor.as_mut().unwrap().tab = 2;
                 self.phase(
                     "tls",

@@ -1,5 +1,6 @@
 use super::*;
 use kafka_reader_rust::language::{Language, LanguagePreference};
+use kafka_reader_rust::oauth::OAuthGrantType;
 use kafka_reader_rust::remembered::{RememberChange, RememberedCredential};
 use std::fs;
 use std::io::Write;
@@ -10,10 +11,12 @@ pub(super) struct ServerEditor {
     pub brokers: String,
     pub protocol: String,
     pub mechanism: String,
+    oauth_grant: OAuthGrantType,
     pub username: String,
     pub password: String,
     pub oauth_endpoint: String,
     pub oauth_client: String,
+    default_oauth_client: bool,
     pub refresh_token: String,
     pub max_token_seconds: String,
     pub ca: String,
@@ -38,6 +41,15 @@ impl ServerEditor {
     fn new(server: Server, credentials: Properties, is_new: bool, topic: String) -> Self {
         let mut properties = server.properties.clone();
         properties.extend(credentials);
+        let is_oauth = properties
+            .get("sasl.mechanism")
+            .or_else(|| properties.get("sasl.mechanisms"))
+            .is_some_and(|m| m.eq_ignore_ascii_case("OAUTHBEARER"));
+        let mut oauth_grant = OAuthGrantType::RefreshToken;
+        if is_oauth && let Ok(grant) = OAuthGrantType::from_properties(&properties) {
+            oauth_grant = grant;
+            properties.remove("oauth.grant.type");
+        }
         let mut take = |key: &str| properties.remove(key).unwrap_or_default();
         let brokers = take("bootstrap.servers");
         let mut protocol = take("security.protocol");
@@ -60,9 +72,11 @@ impl ServerEditor {
         let certificate = take("ssl.certificate.location");
         let key = take("ssl.key.location");
         let key_password = take("ssl.key.password");
-        let oauth_client = properties
-            .remove("oauth.client.id")
-            .unwrap_or_else(|| "kafka-cli".into());
+        let oauth_client = properties.remove("oauth.client.id");
+        let default_oauth_client = oauth_client
+            .as_deref()
+            .is_none_or(|id| id == default_client(oauth_grant));
+        let oauth_client = oauth_client.unwrap_or_else(|| default_client(oauth_grant).into());
         let max_token_seconds = properties
             .remove("oauth.max.token.expiry.seconds")
             .unwrap_or_else(|| "300".into());
@@ -72,10 +86,12 @@ impl ServerEditor {
             brokers,
             protocol: protocol.to_ascii_uppercase(),
             mechanism: mechanism.to_ascii_uppercase(),
+            oauth_grant,
             username,
             password,
             oauth_endpoint,
             oauth_client,
+            default_oauth_client,
             refresh_token,
             max_token_seconds,
             ca,
@@ -101,6 +117,30 @@ impl ServerEditor {
             is_new,
         }
     }
+    fn uses_refresh_token(&self) -> bool {
+        self.mechanism == "OAUTHBEARER" && self.oauth_grant == OAuthGrantType::RefreshToken
+    }
+    pub(super) fn select_mechanism(&mut self, mechanism: &str, grant: OAuthGrantType) {
+        if self.mechanism == mechanism && (mechanism != "OAUTHBEARER" || self.oauth_grant == grant)
+        {
+            return;
+        }
+        if self.mechanism == "OAUTHBEARER" || mechanism == "OAUTHBEARER" {
+            // Broker logins and SSO logins can belong to different accounts.
+            self.username.clear();
+            self.password.clear();
+            self.refresh_token.clear();
+        }
+        self.mechanism = mechanism.into();
+        self.remember = false;
+        if mechanism == "OAUTHBEARER" {
+            self.protocol = "SASL_SSL".into();
+            self.oauth_grant = grant;
+            if self.default_oauth_client {
+                self.oauth_client = default_client(grant).into();
+            }
+        }
+    }
     fn use_saved_input(&mut self, handle: RememberedCredential, session: Option<&Properties>) {
         self.remember = true;
         self.saved_credential = Some(handle);
@@ -113,14 +153,14 @@ impl ServerEditor {
         }
         // Keep the protected value separate from editable text. A blank field may
         // reuse it only for the exact connection from which it was loaded.
-        self.saved_secret = if self.mechanism == "OAUTHBEARER" {
+        self.saved_secret = if self.uses_refresh_token() {
             std::mem::take(&mut self.refresh_token)
         } else {
             std::mem::take(&mut self.password)
         };
     }
     fn auth_key(&self) -> &'static str {
-        if self.mechanism == "OAUTHBEARER" {
+        if self.uses_refresh_token() {
             "oauth.refresh.token"
         } else {
             "sasl.password"
@@ -143,7 +183,7 @@ impl ServerEditor {
             && self
                 .extra_session_properties(credentials)
                 .eq(self.saved_context.iter())
-            && (self.mechanism == "OAUTHBEARER"
+            && (self.uses_refresh_token()
                 || credentials
                     .get("sasl.username")
                     .map(String::as_str)
@@ -156,43 +196,56 @@ impl ServerEditor {
         p.insert("security.protocol".into(), self.protocol.clone());
         p.remove("sasl.mechanisms");
         p.insert("sasl.mechanism".into(), self.mechanism.clone());
-        let login = [
-            ("sasl.username", &self.username),
-            ("sasl.password", &self.password),
-        ];
-        let oauth = [
-            ("oauth.token.endpoint.uri", &self.oauth_endpoint),
-            ("oauth.client.id", &self.oauth_client),
-            ("oauth.refresh.token", &self.refresh_token),
-            ("oauth.max.token.expiry.seconds", &self.max_token_seconds),
-        ];
-        let (active, inactive): (&[_], &[_]) = if self.mechanism == "OAUTHBEARER" {
+        let is_oauth = self.mechanism == "OAUTHBEARER";
+        if is_oauth {
             if self.protocol != "SASL_SSL" {
                 return Err(lang
                     .text(
-                        "Choose SASL_SSL on Connection to use a refresh token",
-                        "Для токена обновления выберите SASL_SSL на вкладке «Подключение»",
+                        "Choose SASL_SSL on Connection to use OAUTHBEARER",
+                        "Для OAUTHBEARER выберите SASL_SSL на вкладке «Подключение»",
                     )
                     .into());
             }
-            (&oauth, &login)
+            OAuthGrantType::from_properties(&p).map_err(|e| lang.message(&e))?;
+            if self.oauth_grant == OAuthGrantType::Password {
+                p.insert("oauth.grant.type".into(), "password".into());
+            } else if self
+                .original
+                .properties
+                .get("oauth.grant.type")
+                .is_some_and(|v| v == "refresh_token")
+            {
+                p.insert("oauth.grant.type".into(), "refresh_token".into());
+            } else {
+                p.remove("oauth.grant.type");
+            }
         } else {
-            (&login, &oauth)
-        };
-        for (key, _) in inactive {
-            p.remove(*key);
+            p.retain(|k, _| !k.starts_with("oauth."));
         }
-        for (key, value) in active.iter().copied().chain([
-            ("ssl.ca.location", &self.ca),
-            ("ssl.certificate.location", &self.certificate),
-            ("ssl.key.location", &self.key),
-            ("ssl.key.password", &self.key_password),
-        ]) {
-            if !value.is_empty() {
+        let refresh = self.uses_refresh_token();
+        for (key, value, active) in [
+            ("sasl.username", &self.username, !refresh),
+            ("sasl.password", &self.password, !refresh),
+            ("oauth.token.endpoint.uri", &self.oauth_endpoint, is_oauth),
+            ("oauth.client.id", &self.oauth_client, is_oauth),
+            ("oauth.refresh.token", &self.refresh_token, refresh),
+            (
+                "oauth.max.token.expiry.seconds",
+                &self.max_token_seconds,
+                is_oauth,
+            ),
+            ("ssl.ca.location", &self.ca, true),
+            ("ssl.certificate.location", &self.certificate, true),
+            ("ssl.key.location", &self.key, true),
+            ("ssl.key.password", &self.key_password, true),
+        ] {
+            if !active {
+                p.remove(key);
+            } else if !value.is_empty() {
                 p.insert(key.into(), value.clone());
             }
         }
-        if self.mechanism == "OAUTHBEARER" {
+        if is_oauth {
             let prop = |key: &str| p.get(key).map(String::as_str).unwrap_or_default();
             kafka_reader_rust::oauth::validate_endpoint(prop("oauth.token.endpoint.uri"))
                 .map_err(|e| lang.message(&e))?;
@@ -582,7 +635,7 @@ impl ReaderApp {
             store.save_with_credential(&mut proposed, server.id, change)?;
             Ok(store.remembered_credential(&proposed, server.id))
         };
-        if editor.mechanism == "OAUTHBEARER" && cfg!(windows) {
+        if editor.uses_refresh_token() && cfg!(windows) {
             let commit = |latest: &str| Ok(((), save(Some(latest))?));
             if editor.remember && !keep {
                 oauth.configure_new_remembered(commit)?;
@@ -659,19 +712,26 @@ impl ReaderApp {
                                 1 => {
                                     ui.label(lang.text("SASL mechanism", "Механизм SASL"));
                                     let refresh_label = lang.text("OAUTHBEARER · Refresh token", "OAUTHBEARER · Токен обновления");
-                                    let before = editor.mechanism.clone();
-                                    let selected = if editor.mechanism == "OAUTHBEARER" { refresh_label } else { &editor.mechanism };
+                                    let password_label = lang.text("OAUTHBEARER · Login and password", "OAUTHBEARER · Логин и пароль");
+                                    let selected = match (editor.mechanism.as_str(), editor.oauth_grant) {
+                                        ("OAUTHBEARER", OAuthGrantType::Password) => password_label,
+                                        ("OAUTHBEARER", OAuthGrantType::RefreshToken) => refresh_label,
+                                        (mechanism, _) => mechanism,
+                                    };
                                     egui::ComboBox::from_id_salt("sasl-mechanism").selected_text(selected).width(290.).show_ui(ui, |ui| {
-                                        for mechanism in ["PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"] { ui.selectable_value(&mut editor.mechanism, mechanism.into(), mechanism); }
-                                        if ui.selectable_value(&mut editor.mechanism, "OAUTHBEARER".into(), refresh_label).changed() {
-                                            editor.protocol = "SASL_SSL".into();
+                                        for mechanism in ["PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"] {
+                                            if ui.selectable_label(editor.mechanism == mechanism, mechanism).clicked() {
+                                                editor.select_mechanism(mechanism, editor.oauth_grant);
+                                            }
+                                        }
+                                        for (grant, label) in [(OAuthGrantType::RefreshToken, refresh_label), (OAuthGrantType::Password, password_label)] {
+                                            if ui.selectable_label(editor.mechanism == "OAUTHBEARER" && editor.oauth_grant == grant, label).clicked() {
+                                                editor.select_mechanism("OAUTHBEARER", grant);
+                                            }
                                         }
                                     }); ui.add_space(8.);
-                                    if before != editor.mechanism {
-                                        editor.remember = false;
-                                    }
                                     if cfg!(windows) {
-                                        let label = if editor.mechanism == "OAUTHBEARER" {
+                                        let label = if editor.uses_refresh_token() {
                                             lang.text("Remember refresh token on this PC", "Запомнить токен обновления на этом ПК")
                                         } else {
                                             lang.text("Remember login and password on this PC", "Запомнить логин и пароль на этом ПК")
@@ -688,24 +748,34 @@ impl ReaderApp {
                                     ui.add_space(8.);
                                     let secret_hint = if editor.remember && !editor.saved_secret.is_empty() {
                                         lang.text("Saved for the original connection · enter to replace", "Сохранено для исходного подключения · введите для замены")
-                                    } else if editor.mechanism == "OAUTHBEARER" {
+                                    } else if editor.uses_refresh_token() {
                                         lang.text("Enter refresh token", "Введите токен обновления")
                                     } else {
                                         lang.text("Enter password", "Введите пароль")
                                     };
                                     if editor.mechanism == "OAUTHBEARER" {
                                         field(ui, lang, lang.text("Token endpoint URL", "URL для получения токена"), &mut editor.oauth_endpoint, "https://sso.example.org/realms/example/protocol/openid-connect/token", false);
-                                        field(ui, lang, lang.text("OAuth client ID", "Идентификатор клиента OAuth"), &mut editor.oauth_client, "kafka-cli", false);
+                                        if field(ui, lang, lang.text("OAuth client ID", "Идентификатор клиента OAuth"), &mut editor.oauth_client, default_client(editor.oauth_grant), false) {
+                                            editor.default_oauth_client = false;
+                                        }
+                                    }
+                                    if editor.uses_refresh_token() {
                                         field(ui, lang, lang.text("Refresh token", "Токен обновления"), &mut editor.refresh_token, secret_hint, true);
+                                    } else {
+                                        let (label, hint) = if editor.mechanism == "OAUTHBEARER" {
+                                            (lang.text("SSO username", "Логин SSO"), lang.text("Domain account login", "Логин доменной учётной записи"))
+                                        } else {
+                                            (lang.text("Username", "Имя пользователя"), lang.text("Kafka principal", "Пользователь Kafka"))
+                                        };
+                                        field(ui, lang, label, &mut editor.username, hint, false);
+                                        field(ui, lang, lang.text("Password", "Пароль"), &mut editor.password, secret_hint, true);
+                                    }
+                                    if editor.mechanism == "OAUTHBEARER" {
                                         field(ui, lang, lang.text("Maximum access token lifetime (seconds)", "Предельный срок действия токена доступа (секунды)"), &mut editor.max_token_seconds, "300", false);
                                         if editor.protocol != "SASL_SSL" {
-                                            ui.colored_label(accent(self.dark()), lang.text("Choose SASL_SSL on Connection to use a refresh token", "Для токена обновления выберите SASL_SSL на вкладке «Подключение»"));
+                                            ui.colored_label(accent(self.dark()), lang.text("Choose SASL_SSL on Connection to use OAUTHBEARER", "Для OAUTHBEARER выберите SASL_SSL на вкладке «Подключение»"));
                                         }
-                                    } else {
-                                        field(ui, lang, lang.text("Username", "Имя пользователя"), &mut editor.username, lang.text("Kafka principal", "Пользователь Kafka"), false);
-                                        field(ui, lang, lang.text("Password", "Пароль"), &mut editor.password, secret_hint, true);
-                                        if !editor.protocol.starts_with("SASL") { ui.label(RichText::new(lang.text("Choose SASL_SSL or SASL_PLAINTEXT on Connection to use these credentials.", "Чтобы использовать эти данные, выберите SASL_SSL или SASL_PLAINTEXT на вкладке «Подключение».")).color(accent(self.dark()))); }
-                                    }
+                                    } else if !editor.protocol.starts_with("SASL") { ui.colored_label(accent(self.dark()), lang.text("Choose SASL_SSL or SASL_PLAINTEXT on Connection to use these credentials.", "Чтобы использовать эти данные, выберите SASL_SSL или SASL_PLAINTEXT на вкладке «Подключение».")); }
                                 }
                                 2 => {
                                     ui.label(RichText::new(lang.text("TLS certificates", "Сертификаты TLS")).strong()); ui.small(lang.text("Certificate and hostname verification are enabled by default.", "Проверка сертификата и имени хоста включена по умолчанию.")); ui.add_space(12.);
@@ -887,6 +957,13 @@ impl ReaderApp {
         }
     }
 }
+fn default_client(grant: OAuthGrantType) -> &'static str {
+    match grant {
+        OAuthGrantType::RefreshToken => "kafka-cli",
+        OAuthGrantType::Password => "kafka-lifetime",
+    }
+}
+
 fn field(
     ui: &mut egui::Ui,
     lang: Language,
@@ -894,8 +971,8 @@ fn field(
     value: &mut String,
     hint: &str,
     password: bool,
-) {
-    paste_edit(
+) -> bool {
+    let response = paste_edit(
         ui,
         lang,
         label,
@@ -905,6 +982,7 @@ fn field(
         clipboard_text,
     );
     ui.add_space(11.);
+    response.changed()
 }
 
 fn clipboard_text() -> Option<String> {
@@ -1022,7 +1100,12 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn only_the_chosen_credential_reopens_and_forget_requires_save() {
-        for mechanism in ["OAUTHBEARER", "SCRAM-SHA-512", "PLAIN"] {
+        for (mechanism, grant) in [
+            ("OAUTHBEARER", OAuthGrantType::RefreshToken),
+            ("OAUTHBEARER", OAuthGrantType::Password),
+            ("SCRAM-SHA-512", OAuthGrantType::RefreshToken),
+            ("PLAIN", OAuthGrantType::RefreshToken),
+        ] {
             let mut app = test_app();
             let directory = app.options.store.directory.clone();
             let reopen = || app_with_store(Store::new(Some(directory.clone())));
@@ -1032,7 +1115,7 @@ mod tests {
             editor.name = "Protected".into();
             editor.brokers = "broker.invalid:9093".into();
             editor.protocol = "SASL_SSL".into();
-            editor.mechanism = mechanism.into();
+            editor.select_mechanism(mechanism, grant);
             editor.oauth_endpoint = "https://sso.invalid/token".into();
             editor.username = "USER_SENTINEL".into();
             editor.password = "PASSWORD_SENTINEL".into();
@@ -1042,7 +1125,11 @@ mod tests {
             editor.test_topic = "events".into();
             app.save_server(&editor).unwrap();
             let id = editor.original.id;
-            assert!(reopen().credentials.is_empty());
+            let mut session_only = reopen();
+            assert!(session_only.credentials.is_empty());
+            session_only.open_server(Some(id));
+            let without_secrets = session_only.server_editor.unwrap();
+            assert_eq!(without_secrets.oauth_grant, grant);
             app.open_server(Some(id));
             let mut editor = app.server_editor.take().unwrap();
             editor.remember = true;
@@ -1050,7 +1137,7 @@ mod tests {
 
             let mut reopened = reopen();
             assert!(reopened.session.is_none());
-            let expected = if mechanism == "OAUTHBEARER" {
+            let expected = if editor.uses_refresh_token() {
                 Properties::from([("oauth.refresh.token".into(), "TOKEN_SENTINEL".into())])
             } else {
                 Properties::from([
@@ -1059,6 +1146,13 @@ mod tests {
                 ])
             };
             assert_eq!(reopened.credentials.get(&id), Some(&expected));
+            if mechanism == "OAUTHBEARER" {
+                let props = session_properties(
+                    reopened.workspace.server(id).unwrap(),
+                    &reopened.credentials,
+                );
+                assert!(reopened.oauth_sessions[&id].matches(&props));
+            }
             assert!(
                 !fs::read_to_string(reopened.options.store.path())
                     .unwrap()
@@ -1075,6 +1169,7 @@ mod tests {
             assert!(!fs::read_to_string(&path).unwrap().contains("SENTINEL"));
             draft.import(Language::English);
             assert!(!draft.remember);
+            assert_eq!(draft.oauth_grant, grant);
             assert!(
                 !draft
                     .build(Language::English)
@@ -1087,6 +1182,17 @@ mod tests {
 
             reopened.open_server(Some(id));
             let mut edit = reopened.server_editor.take().unwrap();
+            if grant == OAuthGrantType::Password {
+                edit.username = "different".into();
+                assert!(
+                    !edit
+                        .build(Language::English)
+                        .unwrap()
+                        .1
+                        .contains_key("sasl.password")
+                );
+                edit.username = edit.saved_username.clone();
+            }
             if mechanism == "OAUTHBEARER" {
                 edit.oauth_endpoint = "https://different.invalid/token".into();
             } else {
@@ -1534,6 +1640,79 @@ mod tests {
                 .chain(secrets.keys())
                 .any(|key| key.starts_with("oauth."))
         );
+    }
+
+    #[test]
+    fn oauth_password_profile_keeps_its_mode_and_separates_sso_and_broker_logins() {
+        let mut app = test_app();
+        app.open_server(None);
+        let mut editor = app.server_editor.take().unwrap();
+        editor.name = "SSO".into();
+        editor.brokers = "broker.example.org:9092".into();
+        editor.username = "old-broker-user".into();
+        editor.password = "old-broker-password".into();
+        editor.select_mechanism("OAUTHBEARER", OAuthGrantType::Password);
+        assert!(editor.password.is_empty() && editor.username.is_empty());
+        assert_eq!(editor.protocol, "SASL_SSL");
+        assert_eq!(editor.oauth_client, "kafka-lifetime");
+        editor.oauth_endpoint = "https://sso.example.org/token".into();
+        editor.username = "domain-user".into();
+        editor.password = "private-password".into();
+        editor.advanced = "oauth.refresh.token=unused".into();
+        let (server, credentials) = editor.build(Language::English).unwrap();
+        assert_eq!(server.properties["oauth.grant.type"], "password");
+        assert_eq!(
+            credentials,
+            Properties::from([
+                ("sasl.username".into(), "domain-user".into()),
+                ("sasl.password".into(), "private-password".into()),
+            ])
+        );
+        let path = app
+            .options
+            .store
+            .directory
+            .join("oauth-password.properties");
+        fs::create_dir_all(&app.options.store.directory).unwrap();
+        editor.file_path = path.to_str().unwrap().into();
+        editor.export(Language::English);
+        let exported = fs::read_to_string(&path).unwrap();
+        assert!(exported.contains("oauth.grant.type=password"));
+        assert!(!exported.contains("domain-user") && !exported.contains("private-password"));
+        editor.import(Language::English);
+        assert_eq!(editor.oauth_grant, OAuthGrantType::Password);
+        assert!(editor.username.is_empty() && editor.password.is_empty());
+
+        // Private profiles without an explicit grant can infer it from a login pair.
+        fs::write(
+            &path,
+            exported.replace(
+                "oauth.grant.type=password",
+                "sasl.username=example\nsasl.password=example",
+            ),
+        )
+        .unwrap();
+        editor.import(Language::English);
+        assert_eq!(editor.oauth_grant, OAuthGrantType::Password);
+        assert_eq!(editor.password, "example");
+        editor.oauth_client = "company-client".into();
+        editor.default_oauth_client = false;
+        editor.select_mechanism("OAUTHBEARER", OAuthGrantType::RefreshToken);
+        assert!(editor.username.is_empty() && editor.password.is_empty());
+        assert_eq!(editor.oauth_client, "company-client");
+        editor.select_mechanism("OAUTHBEARER", OAuthGrantType::Password);
+        editor.username = "domain-user".into();
+        editor.password = "private-password".into();
+        editor.select_mechanism("PLAIN", OAuthGrantType::Password);
+        let (broker, credentials) = editor.build(Language::English).unwrap();
+        assert!(credentials.is_empty());
+        assert!(
+            !broker
+                .properties
+                .keys()
+                .any(|key| key.starts_with("oauth."))
+        );
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

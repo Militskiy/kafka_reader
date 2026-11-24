@@ -156,7 +156,7 @@ def test_reader(args, fixture, run_dir, session, plain_port, client_port, reader
         try:
             if after_reading is not None:
                 if not ready.wait(25):
-                    raise AssertionError('Reader did not signal READING after captured bounds: ' + ''.join(errors)[-1000:])
+                    raise AssertionError('Reader did not signal READING after capturing partition bounds')
                 after_reading()
             process.wait(timeout=45)
             stdout = process.stdout.read()
@@ -165,7 +165,10 @@ def test_reader(args, fixture, run_dir, session, plain_port, client_port, reader
             thread.join(timeout=2)
             process.stdout.close()
             process.stderr.close()
-        (output / f'run-{sequence:02d}.log').write_text(stdout + '\nSTDERR\n' + ''.join(errors), encoding='utf-8')
+        log = stdout + '\nSTDERR\n' + ''.join(errors)
+        if issuer and any(secret in log for secret in (issuer.username, issuer.password, issuer.invalid_password)):
+            raise AssertionError('An OAuth login or password appeared in the reader output')
+        (output / f'run-{sequence:02d}.log').write_text(log, encoding='utf-8')
         summary = parse_summary(stdout)
         records = [json.loads(line) for line in export.read_text(encoding='utf-8').splitlines() if line.strip()] if export.exists() else []
         if not failure and (process.returncode != 0 or str(summary.get('state', '')).upper() == 'FAILED'):
@@ -203,31 +206,36 @@ def test_reader(args, fixture, run_dir, session, plain_port, client_port, reader
     bad, _, code = run(config=wrong, failure=True)
     check(code != 0 or str(bad.get('state', '')).upper() == 'FAILED', 'Wrong password returns a controlled failure')
     if issuer:
-        # The fixture CA exists only in this session and was never installed in the OS.
-        untrusted = session / 'oauth-untrusted.properties'
-        profile = issuer.profile(oauth_port).read_text(encoding='utf-8')
-        untrusted.write_text('\n'.join(line for line in profile.splitlines()
-                                       if not line.startswith('oauth.ssl.ca.location=')) + '\n', encoding='utf-8')
-        failed, _, code = run(config=untrusted, failure=True)
-        check(code != 0 and failed['state'] == 'FAILED' and issuer.grants == 0,
-              'An untrusted HTTPS issuer is rejected before it receives the refresh token')
-        meta, _, _ = run(config=issuer.profile(oauth_port), inspect=True)
-        check(issuer.grants >= 1 and len(meta['partitions']) == 3,
-              'HTTPS refresh-token exchange authenticates for exact-topic metadata over SASL_SSL')
+        for grant, label, rejection in [('refresh_token', 'refresh token', 400), ('password', 'password', 401)]:
+            # The fixture CA exists only in this session and was never installed in the OS.
+            untrusted = session / 'oauth-untrusted.properties'
+            profile = issuer.profile(oauth_port, grant).read_text(encoding='utf-8')
+            untrusted.write_text('\n'.join(line for line in profile.splitlines()
+                                           if not line.startswith('oauth.ssl.ca.location=')) + '\n', encoding='utf-8')
+            initial_requests = issuer.requests
+            failed, _, code = run(config=untrusted, failure=True)
+            check(code != 0 and failed['state'] == 'FAILED' and issuer.requests == initial_requests,
+                  f'An untrusted HTTPS issuer is rejected before it receives the {label}')
+            meta, _, _ = run(config=issuer.profile(oauth_port, grant), inspect=True)
+            check(issuer.grants[grant] >= 1 and {p['partition'] for p in meta['partitions']} == {0, 1, 2},
+                  f'The OAuth {label} grant authenticates for exact-topic metadata over SASL_SSL')
 
-        expected_grants = issuer.grants + 2
-        def append_after_refresh():
-            issuer.wait_for_grants(expected_grants)
-            fixture.call('append', app, partition=1, value='oauth-after-renewal')
+            marker = f'after-{grant}-renewal'
+            def append_after_renewal():
+                issuer.wait_for_grants(grant, issuer.grants[grant] + 1)
+                fixture.call('append', app, partition=1, value=marker)
 
-        _, records, _ = run(config=issuer.profile(oauth_port), mode='latest', partitions='1',
-                            maximum=1, follow=True, after_reading=append_after_refresh)
-        check(issuer.grants >= expected_grants, 'An active reader renews using the rotated refresh token')
-        check(len(records) == 1 and records[0]['valueUtf8'] == 'oauth-after-renewal',
-              'The OAuth-authenticated topic-only reader receives a record after renewal')
-        failed, _, code = run(config=issuer.profile(oauth_port, invalid=True), failure=True)
-        check(code != 0 and failed['state'] == 'FAILED' and '400' in failed['detail'],
-              'A rejected refresh token surfaces the identity provider HTTP status')
+            initial_grants = issuer.grants[grant]
+            _, records, _ = run(config=issuer.profile(oauth_port, grant), mode='latest', partitions='1',
+                                maximum=1, follow=True, after_reading=append_after_renewal)
+            check(issuer.grants[grant] >= initial_grants + 2, 'An active reader renews using '
+                  + ('the rotated refresh token' if grant == 'refresh_token' else 'the original login and password'))
+            check(len(records) == 1 and records[0]['valueUtf8'] == marker,
+                  f'The topic-only reader receives a record after {label} grant renewal')
+            failed, _, code = run(config=issuer.profile(oauth_port, grant, invalid=True), failure=True)
+            check(code != 0 and failed['state'] == 'FAILED' and f'HTTP {rejection}' in failed['detail'],
+                  f'A rejected {label} surfaces HTTP {rejection}'
+                  + (' without exposing the login or password' if grant == 'password' else ''))
     state = fixture.call('state', app)
     check(state['offsets'] == baseline['offsets'], 'Existing group offsets remain unchanged despite imported commit/group settings')
     check(state['groups'] == baseline['groups'], 'Reader sessions create no consumer groups')
@@ -245,7 +253,7 @@ def test_reader(args, fixture, run_dir, session, plain_port, client_port, reader
     hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in binaries if p.is_file()}
     report = dict(app=app, status='PASS', count=len(checks), checks=checks,
                   fixture='Apache Kafka 4.1.2, local KRaft, topic-only SASL/PLAIN reader'
-                          + (' and TLS OAuth refresh-token listener' if issuer else ''),
+                          + (' and TLS OAUTHBEARER with refresh-token and password grants' if issuer else ''),
                   completed_at_utc=datetime.now(timezone.utc).isoformat(),
                   tested_platform=platform.platform(), binary_sha256=hashes)
     (output / 'integration-report.json').write_text(json.dumps(report, indent=2) + '\n')
@@ -311,7 +319,7 @@ def main():
     parser.add_argument('--app', required=True, choices=['csharp','rust'])
     parser.add_argument('--exe', type=Path, required=True)
     parser.add_argument('--classpath', type=Path, default=ROOT/'broker-classpath.txt')
-    parser.add_argument('--oauth', action='store_true', help='Test OAuth against an ephemeral HTTPS issuer and SASL_SSL Kafka listener (requires OpenSSL)')
+    parser.add_argument('--oauth', action='store_true', help='Test OAuth refresh-token and password grants against an ephemeral HTTPS issuer and SASL_SSL Kafka listener (requires OpenSSL)')
     args = parser.parse_args()
     if args.oauth and args.app != 'rust':
         parser.error('--oauth is supported by the Rust reader')

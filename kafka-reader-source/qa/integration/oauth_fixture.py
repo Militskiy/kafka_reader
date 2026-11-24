@@ -43,24 +43,42 @@ class Issuer:
         self.store_password = secrets.token_hex(16)
         self.scope = secrets.token_hex(32)
         self.current = secrets.token_urlsafe(32)
-        self.grants = 0
+        self.username = 'fixture+reader-' + secrets.token_hex(8)
+        self.password = 'fixture &=' + secrets.token_urlsafe(24)
+        self.invalid_password = 'rejected+' + secrets.token_urlsafe(24)
+        self.grants = {'refresh_token': 0, 'password': 0}
+        self.requests = 0
         self.changed = threading.Condition()
 
     def exchange(self, form):
         with self.changed:
-            expected = {'grant_type': ['refresh_token'], 'client_id': ['kafka-cli'],
-                        'refresh_token': [self.current]}
-            if form != expected:
+            self.requests += 1
+            kind = form.get('grant_type')
+            if kind == ['password']:
+                expected = {'grant_type': ['password'], 'client_id': ['kafka-lifetime'],
+                            'username': [self.username], 'password': [self.password]}
+                if form != expected:
+                    # Simulate an issuer echoing a rejected synthetic login in its response.
+                    return 401, {'error': 'invalid_grant',
+                                 'error_description': f'{self.username} {self.invalid_password}'}
+            elif kind == ['refresh_token']:
+                expected = {'grant_type': ['refresh_token'], 'client_id': ['kafka-cli'],
+                            'refresh_token': [self.current]}
+                if form != expected:
+                    return 400, {'error': 'invalid_grant'}
+                self.current = secrets.token_urlsafe(32)
+            else:
                 return 400, {'error': 'invalid_grant'}
-            self.current = secrets.token_urlsafe(32)
-            self.grants += 1
+            self.grants[kind[0]] += 1
             now = int(time.time())
             # Kafka's built-in unsecured validator is exclusively for this loopback test.
             claims = {'sub': 'reader', 'iat': now, 'exp': now + 90, 'scope': self.scope}
             access = jwt_part({'alg': 'none'}) + '.' + jwt_part(claims) + '.'
             self.changed.notify_all()
-            return 200, {'token_type': 'Bearer', 'access_token': access,
-                         'expires_in': 90, 'refresh_token': self.current}
+            response = {'token_type': 'Bearer', 'access_token': access, 'expires_in': 90}
+            if kind == ['refresh_token']:
+                response['refresh_token'] = self.current
+            return 200, response
 
     def broker_config(self):
         prefix = 'listener.name.oauth.'
@@ -75,21 +93,29 @@ class Issuer:
             f'unsecuredLoginStringClaim_sub="fixture-broker" unsecuredValidatorRequiredScope="{self.scope}";',
         ]) + '\n'
 
-    def profile(self, broker_port, invalid=False):
-        path = self.session / ('oauth-invalid.properties' if invalid else 'oauth.properties')
+    def profile(self, broker_port, grant='refresh_token', *, invalid=False):
+        path = self.session / f"oauth-{grant}{'-invalid' if invalid else ''}.properties"
         ca = self.session / 'ca.pem'
-        with self.changed:
-            token = 'invalid-fixture-token' if invalid else self.current
+        if grant == 'password':
+            password = self.invalid_password if invalid else self.password
+            credentials = (f'oauth.grant.type=password\noauth.client.id=kafka-lifetime\n'
+                           f'sasl.username={self.username}\nsasl.password={password}\n')
+        elif grant == 'refresh_token':
+            with self.changed:
+                token = 'invalid-fixture-token' if invalid else self.current
+            credentials = f'oauth.client.id=kafka-cli\noauth.refresh.token={token}\n'
+        else:
+            raise ValueError('Unknown fixture grant type')
         path.write_text(f'bootstrap.servers=127.0.0.1:{broker_port}\nsecurity.protocol=SASL_SSL\n'
             f'sasl.mechanism=OAUTHBEARER\nssl.ca.location={ca}\noauth.ssl.ca.location={ca}\n'
-            f'oauth.token.endpoint.uri={self.endpoint}\noauth.client.id=kafka-cli\n'
-            f'oauth.refresh.token={token}\noauth.max.token.expiry.seconds=4\n', encoding='utf-8')
+            f'oauth.token.endpoint.uri={self.endpoint}\n{credentials}oauth.max.token.expiry.seconds=4\n',
+            encoding='utf-8')
         return path
 
-    def wait_for_grants(self, count):
+    def wait_for_grants(self, grant, count):
         with self.changed:
-            if not self.changed.wait_for(lambda: self.grants >= count, timeout=12):
-                raise AssertionError('No OAuth renewal using the replacement refresh token')
+            if not self.changed.wait_for(lambda: self.grants[grant] >= count, timeout=12):
+                raise AssertionError(f'No OAuth renewal using {grant}')
 
 
 @contextmanager

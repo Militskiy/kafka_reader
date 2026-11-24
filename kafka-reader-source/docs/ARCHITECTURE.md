@@ -1,6 +1,6 @@
 # Architecture
 
-This describes the **Kafka Reader 0.6.0** implementation. Check the referenced
+This describes the **Kafka Reader 0.7.0** implementation. Check the referenced
 source when changing it; [TEST-REPORT.md](../TEST-REPORT.md) records executed
 verification and platform limits.
 
@@ -42,15 +42,18 @@ worker emits metadata, immutable `Arc<Record>` values, progress and state
 events. The GUI drains these into the active `TopicView`; the CLI drains the
 same events directly into its summary and optional JSONL output.
 
-For SASL/OAUTHBEARER, the reader exchanges a refresh token over HTTPS and gives
-the resulting bearer token and expiry to librdkafka's refresh callback. It
-services callbacks while metadata or partition operations are in progress.
-An OAuth session belongs to one server and can carry a rotated refresh token
-from a successful connection test into subsequent reads. Token exchange uses
-the platform TLS verifier or the configured SSO CA. Kafka verifies its TLS
-peer using the broker settings. Access tokens stay in memory. A refresh token
-can be remembered per server on Windows with explicit consent. Profile
-exports omit both tokens.
+For SASL/OAUTHBEARER, the reader exchanges either a refresh token or a username
+and password over HTTPS. Only the access token and its expiry reach librdkafka's
+OAuth callback. The reader services the callback throughout metadata and partition
+operations. Password sessions repeat the password grant on renewal. Refresh-token
+sessions carry rotated tokens from a successful connection test into subsequent
+reads. The editor records `oauth.grant.type=password` so a password profile
+reopens in the same mode even when its credentials were session-only. Existing
+refresh-token profiles can omit this property.
+
+Token exchanges use the platform TLS verifier or the configured SSO CA. Kafka
+verifies its TLS peer using the broker settings. Access tokens stay in memory.
+Profile exports omit passwords, usernames and tokens.
 
 `safe_properties` removes `group.id`, `group.instance.id` and unsupported or
 executable extension hooks. It forces modern and legacy automatic commits,
@@ -179,8 +182,8 @@ with the session's last snapshot. If another instance has saved edits, reopen
 the workspace before saving again.
 It persists profiles, registered topics, favorites, tab identities and settings;
 records, view filters/sorts and session credentials are not serialized.
-The Windows editor can save a SASL username/password pair or OAuth refresh
-token in a separate current-user DPAPI file. The workspace contains an opaque
+The Windows editor can save a SASL or OAuth username/password pair or an OAuth
+refresh token in a separate current-user DPAPI file. The workspace contains an opaque
 reference. The protected credential is bound to its server and connection
 settings. On rotation, the stored refresh token is replaced. Changing or
 forgetting a credential invalidates the prior reference. Private keys, TLS

@@ -21,13 +21,16 @@ python3 run-integration.py --app rust --exe /absolute/path/to/kafka-reader-rust
 
 On Windows, set `JAVA_HOME` to a JDK 21+ installation. From this directory,
 run `mvn.cmd dependency:build-classpath "-Dmdep.outputFile=broker-classpath.txt"`,
-then `python run-integration.py --app rust --exe ..\..\dist\v0.6.0\kafka-reader.exe`.
+then `python run-integration.py --app rust --exe ..\..\target\x86_64-pc-windows-gnu\release\kafka-reader-rust.exe`.
 
-Add `--oauth` to exercise refresh tokens. This also requires `openssl` on
-`PATH`. The fixture creates a temporary CA, a loopback HTTPS token endpoint,
-and a SASL_SSL Kafka listener. It checks refusal of an untrusted issuer, an
-exact-topic inspection, token rotation during a read, delivery after renewal,
-and rejection of an invalid refresh token. All credentials are synthetic.
+Add `--oauth` to exercise refresh-token and password grants. This requires
+`openssl` on `PATH`. The fixture creates a temporary CA, a loopback HTTPS
+token endpoint and a SASL_SSL Kafka listener. For each grant it checks TLS
+verification, exact-topic inspection, renewal during a read and record
+delivery after renewal. The issuer rotates refresh tokens after each use and
+accepts the same synthetic login and password for each password grant. A
+rejected password must produce HTTP 401 and keep both fields out of reader
+output even when the issuer echoes them in the error body.
 
 Each invocation creates a new directory under `work/run-*` and prints its
 path. It formats temporary broker storage with a random cluster ID and
@@ -46,7 +49,7 @@ From the project root, supply the built executable, the path to your copy of
 `sondahub-bridge.mjs`, and an exact topic containing at least one readable record.
 
 ```powershell
-python qa/integration/run-bridge-check.py --exe .\dist\v0.6.0\kafka-reader.exe --bridge-script "$env:USERPROFILE\sondahub-bridge.mjs" --topic fleet.telemetry
+python qa/integration/run-bridge-check.py --exe .\target\x86_64-pc-windows-gnu\release\kafka-reader-rust.exe --bridge-script "$env:USERPROFILE\sondahub-bridge.mjs" --topic fleet.telemetry
 ```
 
 The check uses `npx.cmd --yes --package=node@22` to locate Node 22, starts the

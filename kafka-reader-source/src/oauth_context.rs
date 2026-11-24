@@ -1,6 +1,6 @@
 use crate::{
     model::Properties,
-    oauth::{Grant, RefreshClient},
+    oauth::{Grant, GrantInput, OAuthGrantType, TokenClient},
     remembered::RememberedCredential,
 };
 use crossbeam_channel::{TryRecvError, bounded};
@@ -20,11 +20,48 @@ use std::{
 /// In-memory credentials shared by a server's draft tests and subsequent reads.
 /// A clone can switch accounts without invalidating the original server's session.
 #[derive(Clone, Default)]
-pub struct OAuthSession(Option<Arc<RefreshCredential>>);
+pub struct OAuthSession(Option<Arc<SessionCredential>>);
 
-struct RefreshCredential {
+struct SessionCredential {
     endpoint: String,
     client_id: String,
+    credential: Credential,
+}
+
+enum Credential {
+    Refresh(RefreshCredential),
+    Password { username: String, password: String },
+}
+
+impl SessionCredential {
+    fn original(&self) -> GrantInput<'_> {
+        match &self.credential {
+            Credential::Refresh(refresh) => GrantInput::RefreshToken(&refresh.original),
+            Credential::Password { username, password } => {
+                GrantInput::Password { username, password }
+            }
+        }
+    }
+
+    fn exchange(
+        &self,
+        request: impl FnOnce(GrantInput<'_>) -> Result<Grant, String>,
+    ) -> Result<OAuthToken, String> {
+        let grant = match &self.credential {
+            Credential::Refresh(refresh) => {
+                refresh.exchange(|token| request(GrantInput::RefreshToken(token)))?
+            }
+            Credential::Password { .. } => request(self.original())?,
+        };
+        Ok(OAuthToken {
+            token: grant.access_token,
+            principal_name: grant.principal,
+            lifetime_ms: grant.lifetime_ms,
+        })
+    }
+}
+
+struct RefreshCredential {
     original: String,
     // Only workers take this lock across a network request.
     exchange_lock: Mutex<()>,
@@ -43,7 +80,7 @@ impl RefreshCredential {
     fn exchange(
         &self,
         request: impl FnOnce(&str) -> Result<Grant, String>,
-    ) -> Result<OAuthToken, String> {
+    ) -> Result<Grant, String> {
         // A draft test and an active reader can share a single-use refresh token.
         let _exchange = self.exchange_lock.lock().unwrap();
         let (current, _saved_exchange) = {
@@ -72,8 +109,8 @@ impl RefreshCredential {
                 lease,
             )
         };
-        let grant = request(&current)?;
-        if let Some(next) = grant.refresh_token {
+        let mut grant = request(&current)?;
+        if let Some(next) = grant.refresh_token.take() {
             let mut state = self.state.lock().unwrap();
             // The provider already spent the old token. Keep its successor in memory
             // even if DPAPI or the workspace write fails.
@@ -87,28 +124,31 @@ impl RefreshCredential {
                 return Err(format!("Could not save the rotated refresh token: {error}"));
             }
         }
-        Ok(OAuthToken {
-            token: grant.access_token,
-            principal_name: grant.principal,
-            lifetime_ms: grant.lifetime_ms,
-        })
+        Ok(grant)
     }
 }
 
 impl OAuthSession {
-    fn identity(props: &Properties) -> Option<(&str, &str, &str)> {
+    fn identity(props: &Properties) -> Result<Option<(&str, &str, GrantInput<'_>)>, String> {
         let mechanism = props
             .get("sasl.mechanism")
             .or_else(|| props.get("sasl.mechanisms"));
         if !mechanism.is_some_and(|m| m.eq_ignore_ascii_case("OAUTHBEARER")) {
-            return None;
+            return Ok(None);
         }
         let value = |k: &str| props.get(k).map(String::as_str).unwrap_or_default();
-        Some((
+        let input = match OAuthGrantType::from_properties(props)? {
+            OAuthGrantType::RefreshToken => GrantInput::RefreshToken(value("oauth.refresh.token")),
+            OAuthGrantType::Password => GrantInput::Password {
+                username: value("sasl.username"),
+                password: value("sasl.password"),
+            },
+        };
+        Ok(Some((
             value("oauth.token.endpoint.uri"),
             value("oauth.client.id"),
-            value("oauth.refresh.token"),
-        ))
+            input,
+        )))
     }
 
     /// Can this handle reuse its possibly rotated credential for these settings?
@@ -117,11 +157,11 @@ impl OAuthSession {
             return false;
         };
         Self::identity(props)
-            == Some((
+            == Ok(Some((
                 c.endpoint.as_str(),
                 c.client_id.as_str(),
-                c.original.as_str(),
-            ))
+                c.original(),
+            )))
     }
 
     /// Select the in-memory credential before saving or starting a request.
@@ -130,17 +170,33 @@ impl OAuthSession {
         if self.matches(props) {
             return;
         }
-        let Some((endpoint, client_id, original)) = Self::identity(props) else {
+        let Ok(Some((endpoint, client_id, input))) = Self::identity(props) else {
             self.0 = None;
             return;
         };
-        self.0 = Some(Arc::new(RefreshCredential {
+        let credential = match input {
+            GrantInput::RefreshToken(token) => Credential::Refresh(RefreshCredential {
+                original: token.into(),
+                exchange_lock: Mutex::default(),
+                state: Mutex::default(),
+            }),
+            GrantInput::Password { username, password } => Credential::Password {
+                username: username.into(),
+                password: password.into(),
+            },
+        };
+        self.0 = Some(Arc::new(SessionCredential {
             endpoint: endpoint.into(),
             client_id: client_id.into(),
-            original: original.into(),
-            exchange_lock: Mutex::default(),
-            state: Mutex::default(),
+            credential,
         }));
+    }
+
+    fn refresh_credential(&self) -> Result<&RefreshCredential, String> {
+        match self.0.as_deref().map(|s| &s.credential) {
+            Some(Credential::Refresh(refresh)) => Ok(refresh),
+            _ => Err("OAuth refresh is not configured".into()),
+        }
     }
 
     /// Publish a new rotation target only after an in-flight grant has finished.
@@ -149,7 +205,7 @@ impl OAuthSession {
         &self,
         save: impl FnOnce(&str) -> Result<(T, Option<RememberedCredential>), String>,
     ) -> Result<T, String> {
-        let credential = self.0.as_ref().ok_or("OAuth refresh is not configured")?;
+        let credential = self.refresh_credential()?;
         let _exchange = credential
             .exchange_lock
             .try_lock()
@@ -163,7 +219,7 @@ impl OAuthSession {
         &self,
         save: impl FnOnce(&str) -> Result<(T, Option<RememberedCredential>), String>,
     ) -> Result<T, String> {
-        let credential = self.0.as_ref().ok_or("OAuth refresh is not configured")?;
+        let credential = self.refresh_credential()?;
         let mut state = credential.state.lock().unwrap();
         let (result, remembered) = save(state.latest.as_deref().unwrap_or(&credential.original))?;
         if state.remembered != remembered {
@@ -177,7 +233,7 @@ impl OAuthSession {
 }
 
 pub(crate) struct ReaderContext {
-    refresh: Option<(Arc<RefreshCredential>, RefreshClient)>,
+    refresh: Option<(Arc<SessionCredential>, TokenClient)>,
     last_refresh: Mutex<Option<Result<(), String>>>,
 }
 
@@ -188,7 +244,7 @@ impl ReaderContext {
                 .get("security.protocol")
                 .is_some_and(|v| v.eq_ignore_ascii_case("SASL_SSL"))
             {
-                return Err("Refresh-token authentication requires SASL_SSL".into());
+                return Err("OAuth authentication requires SASL_SSL".into());
             }
             if properties
                 .get("enable.ssl.certificate.verification")
@@ -197,11 +253,12 @@ impl ReaderContext {
                     .get("ssl.endpoint.identification.algorithm")
                     .is_some_and(|v| !v.eq_ignore_ascii_case("https"))
             {
-                return Err("Refresh-token authentication requires Kafka TLS certificate and hostname verification".into());
+                return Err(
+                    "OAuth authentication requires Kafka TLS certificate and hostname verification"
+                        .into(),
+                );
             }
-            if credential.original.trim().is_empty() {
-                return Err("Enter a refresh token for this session".into());
-            }
+            credential.original().validate()?;
             let max_seconds = properties
                 .get("oauth.max.token.expiry.seconds")
                 .map(|s| {
@@ -211,7 +268,7 @@ impl ReaderContext {
                 })
                 .transpose()?
                 .unwrap_or(300);
-            let client = RefreshClient::new(
+            let client = TokenClient::new(
                 &credential.endpoint,
                 &credential.client_id,
                 max_seconds,
@@ -219,6 +276,10 @@ impl ReaderContext {
             )?;
             Some((credential, client))
         } else {
+            // An invalid grant type prevents binding. Report it before creating a Kafka client.
+            if OAuthSession::identity(properties)?.is_some() {
+                return Err("OAuth refresh is not configured".into());
+            }
             None
         };
         Ok(Self {
@@ -338,6 +399,86 @@ mod tests {
         })
     }
 
+    fn password_profile() -> Properties {
+        let mut props = profile();
+        props.remove("oauth.refresh.token");
+        props.insert("sasl.username".into(), "user@example".into());
+        props.insert("sasl.password".into(), "original password".into());
+        props
+    }
+
+    #[test]
+    fn password_session_renews_with_the_same_account_and_tracks_edits() {
+        let props = password_profile();
+        let mut session = OAuthSession::default();
+        session.bind(&props);
+        let credential = session.0.as_ref().unwrap();
+        for replacement in [Some("unsolicited-token"), None] {
+            credential
+                .exchange(|input| {
+                    assert!(matches!(
+                        input,
+                        GrantInput::Password {
+                            username: "user@example",
+                            password: "original password"
+                        }
+                    ));
+                    grant(replacement)
+                })
+                .unwrap();
+        }
+        assert!(
+            session
+                .configure_remembering::<()>(|_| panic!("password used a rotation slot"))
+                .is_err()
+        );
+        for (key, value) in [
+            ("sasl.username", "other user"),
+            ("sasl.password", "new password"),
+            ("oauth.client.id", "other-client"),
+            ("oauth.token.endpoint.uri", "https://other.example/token"),
+            ("oauth.grant.type", "refresh_token"),
+        ] {
+            let mut edited = props.clone();
+            edited.insert(key.into(), value.into());
+            assert!(!session.matches(&edited));
+            let mut draft = session.clone();
+            draft.bind(&edited);
+            assert!(draft.matches(&edited));
+            assert!(session.matches(&props));
+        }
+    }
+
+    #[test]
+    fn explicit_grant_selects_only_its_credentials_and_unknown_modes_fail_before_connecting() {
+        let mut props = password_profile();
+        props.insert("oauth.refresh.token".into(), "old-token".into());
+        let mut session = OAuthSession::default();
+        session.bind(&props);
+        assert!(matches!(
+            session.0.as_ref().unwrap().original(),
+            GrantInput::RefreshToken("old-token")
+        ));
+        props.insert("oauth.grant.type".into(), "password".into());
+        session.bind(&props);
+        assert!(matches!(
+            session.0.as_ref().unwrap().original(),
+            GrantInput::Password { .. }
+        ));
+        props.remove("sasl.password");
+        session.bind(&props);
+        assert_eq!(
+            ReaderContext::new(session.clone(), &props).err().unwrap(),
+            "Enter an OAuth login and password for this session"
+        );
+        props.insert("oauth.grant.type".into(), "wrong-example".into());
+        session.bind(&props);
+        assert_eq!(
+            ReaderContext::new(session, &props).err().unwrap(),
+            "Set oauth.grant.type to password or refresh_token"
+        );
+    }
+
     #[test]
     fn rotation_survives_test_save_read_and_canceled_draft_edits() {
         let mut props = profile();
@@ -348,7 +489,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .exchange(|token| {
-                assert_eq!(token, "initial");
+                assert!(matches!(token, GrantInput::RefreshToken("initial")));
                 grant(Some("rotated"))
             })
             .unwrap();
@@ -359,7 +500,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .exchange(|token| {
-                assert_eq!(token, "rotated");
+                assert!(matches!(token, GrantInput::RefreshToken("rotated")));
                 grant(None)
             })
             .unwrap();
@@ -371,7 +512,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .exchange(|token| {
-                assert_eq!(token, "new credential");
+                assert!(matches!(token, GrantInput::RefreshToken("new credential")));
                 grant(Some("new rotation"))
             })
             .unwrap();
@@ -380,7 +521,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .exchange(|token| {
-                assert_eq!(token, "rotated");
+                assert!(matches!(token, GrantInput::RefreshToken("rotated")));
                 grant(None)
             })
             .unwrap();
@@ -397,7 +538,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .exchange(|token| {
-                assert_eq!(token, "initial");
+                assert!(matches!(token, GrantInput::RefreshToken("initial")));
                 grant(Some("new refresh"))
             })
             .unwrap();
@@ -408,7 +549,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .exchange(|token| {
-                assert_eq!(token, "new refresh");
+                assert!(matches!(token, GrantInput::RefreshToken("new refresh")));
                 grant(None)
             })
             .unwrap();
@@ -460,7 +601,7 @@ mod tests {
             .unwrap();
         credential
             .exchange(|token| {
-                assert_eq!(token, "after-test");
+                assert!(matches!(token, GrantInput::RefreshToken("after-test")));
                 grant(Some("after-read"))
             })
             .unwrap();
@@ -478,7 +619,10 @@ mod tests {
         thread::scope(|scope| {
             let task = scope.spawn(move || {
                 credential.exchange(|token| {
-                    assert_eq!(token, "from-another-instance");
+                    assert!(matches!(
+                        token,
+                        GrantInput::RefreshToken("from-another-instance")
+                    ));
                     started.send(()).unwrap();
                     send_grant.recv_timeout(Duration::from_secs(5)).unwrap();
                     grant(Some("session-only-again"))
@@ -521,7 +665,10 @@ mod tests {
         );
         credential
             .exchange(|token| {
-                assert_eq!(token, "session-only-again");
+                assert!(matches!(
+                    token,
+                    GrantInput::RefreshToken("session-only-again")
+                ));
                 grant(None)
             })
             .unwrap();
@@ -535,11 +682,12 @@ mod tests {
             ("enable.ssl.certificate.verification", "false"),
             ("ssl.endpoint.identification.algorithm", "none"),
         ] {
-            let mut props = profile();
-            props.insert(key.into(), value.into());
-            let mut session = OAuthSession::default();
-            session.bind(&props);
-            assert!(ReaderContext::new(session, &props).is_err(), "{key}");
+            for mut props in [profile(), password_profile()] {
+                props.insert(key.into(), value.into());
+                let mut session = OAuthSession::default();
+                session.bind(&props);
+                assert!(ReaderContext::new(session, &props).is_err(), "{key}");
+            }
         }
     }
 }

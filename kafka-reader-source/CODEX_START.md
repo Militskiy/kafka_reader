@@ -1,6 +1,6 @@
 # Open this project in Codex
 
-This source distribution contains Kafka Reader **0.6.0**, its build and test
+This source distribution contains Kafka Reader **0.7.0**, its build and test
 tools, and project guidance.
 
 ## Import the complete source

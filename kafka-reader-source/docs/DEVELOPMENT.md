@@ -1,7 +1,7 @@
 # Development, verification, and packaging
 
 Use these commands from the project root unless a section changes directory.
-They describe the **0.6.0** source layout. Check the current files when updating
+They describe the **0.7.0** source layout. Check the current files when updating
 versions or build targets. [TEST-REPORT.md](../TEST-REPORT.md) is the record of
 what actually ran for the delivered release.
 
@@ -86,7 +86,7 @@ $check = Start-Process -Wait -PassThru -NoNewWindow `
   -ArgumentList '--self-test'
 if ($check.ExitCode -ne 0) { throw 'Kafka Reader self-test failed' }
 
-.\dist\v0.6.0\kafka-reader.exe --data-dir "$env:TEMP\kafka-reader-dev-workspace"
+.\dist\v0.7.0\kafka-reader.exe --data-dir "$env:TEMP\kafka-reader-dev-workspace"
 ```
 
 The build script sets the required native-library environment before invoking
@@ -105,7 +105,7 @@ rustup target add x86_64-pc-windows-gnu
 
 The internal output is
 `target/x86_64-pc-windows-gnu/release/kafka-reader-rust.exe`; the portable output
-is `dist/v0.6.0/kafka-reader.exe`.
+is `dist/v0.7.0/kafka-reader.exe`.
 
 Keep [.cargo/config.toml](../.cargo/config.toml), [build.rs](../build.rs), and
 the static features in [Cargo.toml](../Cargo.toml). They supply static GNU
@@ -117,7 +117,7 @@ distribution model.
 For import inspection, a MinGW binutils environment can use:
 
 ```bash
-x86_64-w64-mingw32-objdump -p dist/v0.6.0/kafka-reader.exe
+x86_64-w64-mingw32-objdump -p dist/v0.7.0/kafka-reader.exe
 ```
 
 Review the imported DLL names for unexpected third-party runtimes. An OS-only
@@ -224,7 +224,7 @@ For an existing pair of binaries built in the default target directories:
 python3 packaging/package.py \
   --linux-exe target/release/kafka-reader-rust \
   --windows-exe target/x86_64-pc-windows-gnu/release/kafka-reader-rust.exe \
-  --out dist/v0.6.0
+  --out dist/v0.7.0
 ```
 
 The packager lists the shipped integration fixture files in `FIXTURE_FILES`.

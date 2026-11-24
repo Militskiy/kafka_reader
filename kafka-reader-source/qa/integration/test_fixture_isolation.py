@@ -9,12 +9,32 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from oauth_fixture import Issuer
+
 
 runner = runpy.run_path(str(Path(__file__).with_name('run-integration.py')))
 run_fixture = runner['run_fixture']
 
 
 class FixtureIsolationTests(unittest.TestCase):
+    def test_password_grants_issue_only_access_tokens_and_leave_the_refresh_grant_independent(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            issuer = Issuer(Path(temporary))
+            original_refresh = issuer.current
+            form = {'grant_type': ['password'], 'client_id': ['kafka-lifetime'],
+                    'username': [issuer.username], 'password': [issuer.password]}
+            for _ in range(2):
+                status, response = issuer.exchange(form)
+                self.assertEqual(status, 200)
+                self.assertIn('access_token', response)
+                self.assertNotIn('refresh_token', response)
+            status, response = issuer.exchange({**form, 'password': [issuer.invalid_password]})
+            self.assertEqual(status, 401)
+            self.assertNotIn('access_token', response)
+            self.assertIn(issuer.invalid_password, response['error_description'])
+            self.assertEqual(issuer.current, original_refresh)
+            self.assertEqual(issuer.grants, {'refresh_token': 0, 'password': 2})
+
     def test_foreign_cluster_is_rejected_before_seeding_and_processes_are_closed(self):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary) / 'work'

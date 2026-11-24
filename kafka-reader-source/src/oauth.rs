@@ -1,4 +1,5 @@
-//! OAuth refresh-token grant for a public Kafka client.
+//! OAuth token endpoint for public Kafka clients.
+use crate::model::Properties;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
 use std::{
@@ -17,6 +18,59 @@ use ureq::{
 const MAX_RESPONSE: u64 = 128 * 1024;
 const MAX_CA_BYTES: u64 = 8 * 1024 * 1024;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OAuthGrantType {
+    RefreshToken,
+    Password,
+}
+
+impl OAuthGrantType {
+    pub fn from_properties(props: &Properties) -> Result<Self, String> {
+        match props.get("oauth.grant.type").map(String::as_str) {
+            Some("refresh_token") => Ok(Self::RefreshToken),
+            Some("password") => Ok(Self::Password),
+            Some(_) => Err("Set oauth.grant.type to password or refresh_token".into()),
+            None => {
+                let present = |key: &str| props.get(key).is_some_and(|s| !s.is_empty());
+                if !present("oauth.refresh.token")
+                    && (present("sasl.username") || present("sasl.password"))
+                {
+                    Ok(Self::Password)
+                } else {
+                    Ok(Self::RefreshToken)
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GrantInput<'a> {
+    RefreshToken(&'a str),
+    Password {
+        username: &'a str,
+        password: &'a str,
+    },
+}
+
+impl GrantInput<'_> {
+    pub(crate) fn validate(self) -> Result<(), String> {
+        match self {
+            Self::RefreshToken(token)
+                if token.trim().is_empty() || token.chars().any(char::is_control) =>
+            {
+                Err("Enter an OAuth refresh token for this session".into())
+            }
+            Self::Password { username, password }
+                if username.trim().is_empty() || password.is_empty() =>
+            {
+                Err("Enter an OAuth login and password for this session".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
 pub fn validate_endpoint(value: &str) -> Result<(), String> {
     let error = "Enter an HTTPS OAuth token endpoint without embedded credentials or a fragment";
     let uri = value.parse::<Uri>().map_err(|_| error.to_string())?;
@@ -31,7 +85,7 @@ pub fn validate_endpoint(value: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) struct RefreshClient {
+pub(crate) struct TokenClient {
     agent: Agent,
     endpoint: String,
     client_id: String,
@@ -45,7 +99,7 @@ pub(crate) struct Grant {
     pub refresh_token: Option<String>,
 }
 
-impl RefreshClient {
+impl TokenClient {
     pub(crate) fn new(
         endpoint: &str,
         client_id: &str,
@@ -71,27 +125,33 @@ impl RefreshClient {
         })
     }
 
-    pub(crate) fn exchange(&self, refresh_token: &str) -> Result<Grant, String> {
-        if refresh_token.trim().is_empty() || refresh_token.chars().any(char::is_control) {
-            return Err("Enter an OAuth refresh token for this session".into());
-        }
+    pub(crate) fn exchange(&self, input: GrantInput<'_>) -> Result<Grant, String> {
+        input.validate()?;
         let started_ms = unix_millis()?;
-        let mut response = self
+        let request = self
             .agent
             .post(self.endpoint.as_str())
-            .header("Accept", "application/json")
-            .send_form([
+            .header("Accept", "application/json");
+        let mut response = match input {
+            GrantInput::RefreshToken(token) => request.send_form([
                 ("grant_type", "refresh_token"),
                 ("client_id", self.client_id.as_str()),
-                ("refresh_token", refresh_token),
-            ])
-            .map_err(|error| match error {
-                ureq::Error::Timeout(_) => "OAuth token endpoint timed out",
-                ureq::Error::NativeTls(_) | ureq::Error::Tls(_) => {
-                    "OAuth token endpoint TLS verification or handshake failed"
-                }
-                _ => "Could not connect to the OAuth token endpoint",
-            })?;
+                ("refresh_token", token),
+            ]),
+            GrantInput::Password { username, password } => request.send_form([
+                ("grant_type", "password"),
+                ("client_id", self.client_id.as_str()),
+                ("username", username),
+                ("password", password),
+            ]),
+        }
+        .map_err(|error| match error {
+            ureq::Error::Timeout(_) => "OAuth token endpoint timed out",
+            ureq::Error::NativeTls(_) | ureq::Error::Tls(_) => {
+                "OAuth token endpoint TLS verification or handshake failed"
+            }
+            _ => "Could not connect to the OAuth token endpoint",
+        })?;
         let status = response.status();
         if !status.is_success() {
             // An identity provider's response body can echo the submitted credentials.
@@ -106,8 +166,12 @@ impl RefreshClient {
             .limit(MAX_RESPONSE)
             .read_to_vec()
             .map_err(|_| "Could not read OAuth token response within the size or time limit")?;
-        let response: TokenResponse =
+        let mut response: TokenResponse =
             serde_json::from_slice(&body).map_err(|_| "Invalid OAuth token response")?;
+        if matches!(input, GrantInput::Password { .. }) {
+            // This mode authenticates with the password again on every renewal.
+            response.refresh_token = None;
+        }
         response.into_grant(
             &self.client_id,
             self.max_lifetime_seconds,
@@ -303,7 +367,13 @@ mod tests {
 
     // Production only accepts HTTPS. Exercise the same request and response handling
     // with a loopback socket and an explicit no-proxy transport for deterministic tests.
-    fn mock_exchange(status: &str, body: &str) -> Result<Grant, String> {
+    const REFRESH: GrantInput<'static> = GrantInput::RefreshToken("sample+&/=");
+    const PASSWORD: GrantInput<'static> = GrantInput::Password {
+        username: "user@corp",
+        password: "т+&/=",
+    };
+
+    fn mock_exchange(input: GrantInput<'_>, status: &str, body: &str) -> Result<Grant, String> {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let addr = listener.local_addr().unwrap();
         thread::scope(|scope| {
@@ -322,14 +392,18 @@ mod tests {
                     .unwrap().parse::<usize>().unwrap();
                 let mut form = vec![0; length];
                 reader.read_exact(&mut form).unwrap();
-                assert_eq!(form, b"grant_type=refresh_token&client_id=kafka%2Bcli&refresh_token=sample%2B%26%2F%3D");
+                let expected = match input {
+                    GrantInput::RefreshToken(_) => "grant_type=refresh_token&client_id=kafka%2Bcli&refresh_token=sample%2B%26%2F%3D",
+                    GrantInput::Password { .. } => "grant_type=password&client_id=kafka%2Bcli&username=user%40corp&password=%D1%82%2B%26%2F%3D",
+                };
+                assert_eq!(form, expected.as_bytes());
                 // A 307 would replay the secret if redirects were followed.
                 let head = format!("HTTP/1.1 {status}\r\nLocation: http://{addr}/unexpected\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len());
                 stream.write_all(head.as_bytes()).unwrap();
                 // The client may close after the headers on status or size errors.
                 let _ = stream.write_all(body.as_bytes());
             });
-            let client = RefreshClient {
+            let client = TokenClient {
                 agent: token_agent(
                     Agent::config_builder().proxy(None),
                     RootCerts::PlatformVerifier,
@@ -338,7 +412,7 @@ mod tests {
                 client_id: "kafka+cli".into(),
                 max_lifetime_seconds: 300,
             };
-            let result = client.exchange("sample+&/=");
+            let result = client.exchange(input);
             server.join().unwrap();
             result
         })
@@ -346,7 +420,7 @@ mod tests {
 
     #[test]
     fn exchanges_encoded_form_and_returns_rotated_token() {
-        let grant = mock_exchange("200 OK", r#"{"access_token":"opaque","token_type":"Bearer","expires_in":600,"refresh_token":"replacement"}"#).unwrap();
+        let grant = mock_exchange(REFRESH, "200 OK", r#"{"access_token":"opaque","token_type":"Bearer","expires_in":600,"refresh_token":"replacement"}"#).unwrap();
         assert_eq!(grant.access_token, "opaque");
         assert_eq!(grant.principal, "kafka+cli");
         assert_eq!(grant.refresh_token.as_deref(), Some("replacement"));
@@ -354,13 +428,29 @@ mod tests {
     }
 
     #[test]
-    fn no_redirect_replay_no_echoed_secrets_and_bounded_response() {
-        for (status, code) in [("400 Bad Request", 400), ("307 Temporary Redirect", 307)] {
-            let error = mock_exchange(status, "fixture-credential-echo")
-                .err()
-                .unwrap();
-            assert_eq!(error, format!("OAuth token endpoint returned HTTP {code}"));
+    fn password_grant_encodes_credentials_and_does_not_adopt_a_refresh_token() {
+        for body in [
+            r#"{"access_token":"opaque","expires_in":30}"#,
+            r#"{"access_token":"opaque","expires_in":30,"refresh_token":"unused"}"#,
+        ] {
+            let grant = mock_exchange(PASSWORD, "200 OK", body).unwrap();
+            assert_eq!(grant.access_token, "opaque");
+            assert!(grant.refresh_token.is_none());
         }
-        assert!(mock_exchange("200 OK", &"x".repeat(MAX_RESPONSE as usize + 1)).is_err());
+    }
+
+    #[test]
+    fn no_redirect_replay_no_echoed_secrets_and_bounded_response() {
+        for input in [REFRESH, PASSWORD] {
+            for (status, code) in [("401 Unauthorized", 401), ("307 Temporary Redirect", 307)] {
+                let error = mock_exchange(input, status, "fixture-credential-echo")
+                    .err()
+                    .unwrap();
+                assert_eq!(error, format!("OAuth token endpoint returned HTTP {code}"));
+            }
+            assert!(
+                mock_exchange(input, "200 OK", &"x".repeat(MAX_RESPONSE as usize + 1)).is_err()
+            );
+        }
     }
 }

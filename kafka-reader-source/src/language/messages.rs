@@ -74,17 +74,21 @@ impl Language {
             "Enter bootstrap.servers as host:port" => {
                 "Укажите bootstrap.servers в формате хост:порт"
             }
-            "Choose username/password or OAuth refresh token in Authentication. Java sasl.jaas.config is not supported." => {
-                "На вкладке «Аутентификация» выберите вход по имени и паролю или по токену обновления OAuth. Параметр Java sasl.jaas.config не поддерживается"
+            "Choose an authentication method in the server editor or use native profile properties. Java sasl.jaas.config is not supported." => {
+                "Выберите способ входа в настройках сервера или задайте его в параметрах профиля. Параметр Java sasl.jaas.config не поддерживается"
             }
             "Supported SASL mechanisms are PLAIN, SCRAM-SHA-256, SCRAM-SHA-512 and OAUTHBEARER" => {
                 "Поддерживаются механизмы SASL PLAIN, SCRAM-SHA-256, SCRAM-SHA-512 и OAUTHBEARER"
             }
-            "Refresh-token authentication requires SASL_SSL" => {
-                "Для входа по токену обновления выберите SASL_SSL"
+            "OAuth authentication requires SASL_SSL" => "Для входа через OAuth выберите SASL_SSL",
+            "OAuth authentication requires Kafka TLS certificate and hostname verification" => {
+                "Для входа через OAuth включите проверку сертификата TLS и имени узла Kafka"
             }
-            "Refresh-token authentication requires Kafka TLS certificate and hostname verification" => {
-                "Для входа по токену обновления включите проверку сертификата TLS и имени узла Kafka"
+            "Enter an OAuth login and password for this session" => {
+                "Введите логин и пароль OAuth для этого сеанса"
+            }
+            "Set oauth.grant.type to password or refresh_token" => {
+                "Для параметра oauth.grant.type укажите password или refresh_token"
             }
             "Enter a refresh token for this session"
             | "Enter an OAuth refresh token for this session" => {
@@ -126,15 +130,15 @@ impl Language {
             "Choose SASL authentication to remember a credential" => {
                 "Чтобы запомнить учётные данные, выберите аутентификацию SASL"
             }
-            "Enter the Kafka username to remember the password" => {
-                "Чтобы запомнить пароль, введите имя пользователя Kafka"
+            "Enter the username to remember the password" => {
+                "Чтобы запомнить пароль, введите имя пользователя"
             }
             "Enter the password to remember" => "Введите пароль, который нужно запомнить",
             "Enter the refresh token to remember" => {
                 "Введите токен обновления, который нужно запомнить"
             }
-            "Remembering a refresh token requires SASL_SSL, a client ID and a saved HTTPS endpoint without a query" => {
-                "Для запоминания токена нужны SASL_SSL, идентификатор клиента и сохранённый HTTPS-адрес без параметров запроса"
+            "Remembering OAuth credentials requires SASL_SSL, a client ID and a saved HTTPS endpoint without a query" => {
+                "Чтобы запомнить учётные данные OAuth, выберите SASL_SSL и укажите идентификатор клиента и HTTPS-адрес без параметров запроса"
             }
             "Unsupported mechanism for a remembered credential" => {
                 "Для этого механизма нельзя запомнить учётные данные"

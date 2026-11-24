@@ -1,5 +1,22 @@
 # Kafka Reader verification reports
 
+## 0.7.0 · Windows password-grant development build
+
+On 24 November 2026, the Windows GNU release build passed formatting, 51
+library tests, 23 application tests and 9 offline self-checks. The native
+desktop smoke completed 49 checks. A second process completed 20 reopen
+checks, including restoration of an opted-in OAuth password through DPAPI.
+The [authentication form](docs/screenshots/v0.7.0/windows-oauth-password.png)
+shows the Windows build using a synthetic account and a masked password.
+
+The [local Kafka fixture](qa/results/v0.7.0/kafka-integration.json) passed
+30 checks. The password grant authenticated for exact-topic metadata, renewed
+with the original credentials during a live read and delivered a later record.
+A wrong password returned HTTP 401 without revealing either credential in
+the CLI output. An untrusted SSO certificate prevented the password from reaching
+the issuer. The run used a disposable Kafka 4.1.2 cluster and HTTPS issuer.
+Corporate SSO and cluster acceptance require a separate run on the work network.
+
 ## 0.6.0 · Windows x64 release
 
 Windows 11 ran the locked GNU release build, the format check and 70 Rust

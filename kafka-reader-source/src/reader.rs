@@ -290,7 +290,7 @@ fn real(
         return Err("Enter bootstrap.servers as host:port".into());
     }
     if req.props.contains_key("sasl.jaas.config") {
-        return Err("Choose username/password or OAuth refresh token in Authentication. Java sasl.jaas.config is not supported.".into());
+        return Err("Choose an authentication method in the server editor or use native profile properties. Java sasl.jaas.config is not supported.".into());
     }
     let p = safe_properties(&req.props);
     if p.get("security.protocol")

@@ -1,4 +1,4 @@
-# Kafka Reader 0.6.0 — quick start
+# Kafka Reader 0.7.0 — quick start
 
 ## Launch
 
@@ -7,7 +7,7 @@ executable with Kafka, TLS and compression code linked into it. No companion
 library DLLs, Java, .NET, browser or installer are required. The ZIP contains
 optional documentation, example profiles and dependency notices alongside it.
 
-**Linux x64:** follow the [Linux build instructions](https://github.com/Militskiy/kafka_reader/blob/v0.6.0/kafka-reader-source/docs/DEVELOPMENT.md#linux-build-and-local-run),
+**Linux x64:** follow the [Linux build instructions](https://github.com/Militskiy/kafka_reader/blob/main/kafka-reader-source/docs/DEVELOPMENT.md#linux-build-and-local-run),
 then run `./target/release/kafka-reader-rust` in an X11/XWayland session with
 a working OpenGL driver.
 
@@ -22,7 +22,7 @@ the built-in demo server is removed when an older workspace is loaded.
    `broker-1:9092,broker-2:9092`, a security protocol and an exact topic name.
 3. In **Authentication**, select the mechanism configured for that Kafka listener.
    For PLAIN or SCRAM enter your username and password. For OAUTHBEARER follow
-   the refresh-token instructions below. In **TLS**, provide PEM CA/client-certificate/key paths where
+   the login/password or refresh-token instructions below. In **TLS**, provide PEM CA/client-certificate/key paths where
    required. **Advanced** accepts additional librdkafka properties or imports a
    literal `.properties` profile.
 4. Click **Test exact topic** to check access in the background, then **Save
@@ -37,6 +37,23 @@ the initial bootstrap address. The app uses direct partition reads without a
 consumer group or offset commits. It was tested with topic READ/DESCRIBE access
 and no consumer-group permission. Kafka web UI access is not required.
 Use a broker that supports Metadata v4 (Apache Kafka 0.11 or newer).
+
+### Connect with an OAuth login and password
+
+1. In **Connection**, enter the Kafka broker hostnames and listener port supplied by your service.
+   Select **SASL_SSL** and enter a topic for which your account has Describe and Read access.
+2. In **Authentication**, choose **OAUTHBEARER · Login and password**. Enter the
+   HTTPS token endpoint, your domain account's username and password, and the
+   client ID registered for the password grant. The suggested client ID is `kafka-lifetime`.
+3. If your service uses a private CA, configure the broker CA in **TLS** and
+   the SSO CA with `oauth.ssl.ca.location` in **Advanced**. Select **Test exact topic**,
+   then **Save server**. For services on a private network, connect to that network first.
+
+During a long read Kafka Reader requests new access tokens with the same login and password.
+On Windows, **Remember login and password on this PC** makes them available after a restart.
+For the CLI, copy the [password-grant profile](examples/oauth-password.properties)
+and add `sasl.username` and `sasl.password` to your private copy.
+See the [Windows password-grant form](docs/screenshots/v0.7.0/windows-oauth-password.png).
 
 ### Connect with a refresh token
 
@@ -104,7 +121,7 @@ See [App settings in Russian](docs/screenshots/v0.3.0/windows-russian-settings.p
 
 Profiles, topic names, Favorites, open tab identities and app settings restore on
 startup. Startup does not connect or read. On Windows, the Authentication tab lets you remember a SASL login and
-password or an OAuth refresh token for that server. Select the appropriate
+password, OAuth login and password, or OAuth refresh token for that server. Select the appropriate
 checkbox and save the server. Windows DPAPI protects the credential for your
 account. To forget it, clear the checkbox and save again. By default, credentials
 last only for the session. Certificate paths can be saved. Message bodies are not saved in the workspace file.

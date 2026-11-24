@@ -249,17 +249,19 @@ impl ReaderApp {
                 continue;
             };
             let result = handle.load().and_then(|secrets| {
-                if secrets.contains_key("oauth.refresh.token") {
-                    let mut props = self
-                        .workspace
-                        .server(id)
-                        .ok_or("Server is unavailable")?
-                        .properties
-                        .clone();
+                let server = self.workspace.server(id).ok_or("Server is unavailable")?;
+                let mechanism = server
+                    .properties
+                    .get("sasl.mechanism")
+                    .or_else(|| server.properties.get("sasl.mechanisms"));
+                if mechanism.is_some_and(|m| m.eq_ignore_ascii_case("OAUTHBEARER")) {
+                    let mut props = server.properties.clone();
                     props.extend(secrets.clone());
                     let session = self.oauth_sessions.entry(id).or_default();
                     session.bind(&props);
-                    session.configure_remembering(|_| Ok(((), Some(handle))))?;
+                    if secrets.contains_key("oauth.refresh.token") {
+                        session.configure_remembering(|_| Ok(((), Some(handle))))?;
+                    }
                 }
                 Ok(secrets)
             });
